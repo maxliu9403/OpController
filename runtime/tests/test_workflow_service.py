@@ -64,3 +64,60 @@ async def test_delete_workflow_blocks_when_batch_references_it() -> None:
 
         with pytest.raises(ValueError, match="引用"):
             await service.delete_workflow(session, workflow.id)
+
+
+@pytest.mark.asyncio
+async def test_rename_folder_moves_workflows() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async_session = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    service = WorkflowService(root_dir=Path("."))
+    async with async_session() as session:
+        await service.ensure_folder(session, "旧分组")
+        workflow = WorkflowTemplateRecord(
+            name="Folder rename workflow",
+            version="1.0.0",
+            folder="旧分组",
+            target_provider_type="ixbrowser",
+            workflow_yaml="metadata: {name: Folder rename workflow, version: '1.0.0'}",
+            normalized_workflow_json={},
+            selector_catalog_json={},
+        )
+        session.add(workflow)
+        await session.commit()
+
+        renamed = await service.rename_folder(session, "旧分组", "新分组")
+
+        assert renamed.name == "新分组"
+        updated = await service.get_workflow(session, workflow.id)
+        assert updated.folder == "新分组"
+
+
+@pytest.mark.asyncio
+async def test_delete_folder_moves_workflows_to_default_folder() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async_session = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    service = WorkflowService(root_dir=Path("."))
+    async with async_session() as session:
+        await service.ensure_folder(session, "待删除分组")
+        workflow = WorkflowTemplateRecord(
+            name="Folder delete workflow",
+            version="1.0.0",
+            folder="待删除分组",
+            target_provider_type="ixbrowser",
+            workflow_yaml="metadata: {name: Folder delete workflow, version: '1.0.0'}",
+            normalized_workflow_json={},
+            selector_catalog_json={},
+        )
+        session.add(workflow)
+        await session.commit()
+
+        await service.delete_folder(session, "待删除分组")
+
+        updated = await service.get_workflow(session, workflow.id)
+        assert updated.folder == "未分组"

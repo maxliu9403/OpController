@@ -1,6 +1,7 @@
 import type {
   BatchDetail,
   BatchSummary,
+  InputFileParseResult,
   LocatorLivePreview,
   LocatorPickResult,
   ProfileRecord,
@@ -180,6 +181,13 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ name, description }),
     }),
+  updateWorkflowFolder: (oldName: string, name: string, description?: string) =>
+    request<WorkflowFolderRecord>(`/workflow-folders/${encodeURIComponent(oldName)}`, {
+      method: "PUT",
+      body: JSON.stringify({ name, description }),
+    }),
+  deleteWorkflowFolder: (name: string) =>
+    request<{ status: string }>(`/workflow-folders/${encodeURIComponent(name)}`, { method: "DELETE" }),
   getWorkflow: (workflowId: string) => request<WorkflowRecord>(`/workflows/${workflowId}`),
   createWorkflow: (workflowYaml: string, folder?: string) =>
     request<WorkflowRecord>("/workflows", {
@@ -234,6 +242,11 @@ export const api = {
       detected_columns: string[];
       preview_rows: Record<string, unknown>[];
     }>("/batches/import", { method: "POST", body: form });
+  },
+  parseScheduleInputFile: async (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return request<InputFileParseResult>("/schedules/input-file/parse", { method: "POST", body: form });
   },
   listBatches: () => request<BatchSummary[]>("/batches"),
   getBatch: (batchId: string) => request<BatchDetail>(`/batches/${batchId}`),

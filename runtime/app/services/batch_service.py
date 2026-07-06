@@ -28,7 +28,16 @@ from app.models import (
     TaskRunStatus,
 )
 from app.providers.registry import ProviderRegistry
-from app.schemas.batch import BatchDetail, BatchImportResult, BatchRowPayload, BatchSummary, StartBatchRequest, TaskRunDetail, StepRunDetail
+from app.schemas.batch import (
+    BatchDetail,
+    BatchImportResult,
+    BatchRowPayload,
+    BatchSummary,
+    InputFileParseResult,
+    StartBatchRequest,
+    StepRunDetail,
+    TaskRunDetail,
+)
 from app.schemas.provider import ProviderSessionRef
 from app.schemas.workflow import WorkflowDefinition
 from app.services.execution_service import ExecutionService
@@ -107,6 +116,15 @@ class BatchService:
             batch=await self.get_batch_detail(session, batch.id),
             detected_columns=list(rows[0].keys()) if rows else [],
             preview_rows=rows[:5],
+        )
+
+    def parse_input_file(self, *, file_name: str, content: bytes) -> InputFileParseResult:
+        rows = self._parse_input_file(file_name, content)
+        return InputFileParseResult(
+            total_rows=len(rows),
+            detected_columns=list(rows[0].keys()) if rows else [],
+            preview_rows=rows[:5],
+            rows=rows,
         )
 
     async def get_batch_detail(self, session: AsyncSession, batch_id: str) -> BatchDetail:

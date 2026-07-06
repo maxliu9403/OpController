@@ -5,7 +5,7 @@ type SectionCardProps = {
   title: string;
   subtitle?: string;
   extra?: ReactNode;
-  children: ReactNode;
+  children?: ReactNode;
 };
 
 export function SectionCard({ title, subtitle, extra, children }: SectionCardProps) {
@@ -13,9 +13,9 @@ export function SectionCard({ title, subtitle, extra, children }: SectionCardPro
     <Card
       className="section-card"
       title={
-        <Space direction="vertical" size={0}>
+        <Space className="section-card-title-line" size={10}>
           <Typography.Text className="section-eyebrow">{title}</Typography.Text>
-          {subtitle ? <Typography.Text type="secondary">{subtitle}</Typography.Text> : null}
+          {subtitle ? <Typography.Text className="section-subtitle">{subtitle}</Typography.Text> : null}
         </Space>
       }
       extra={extra}
@@ -24,4 +24,3 @@ export function SectionCard({ title, subtitle, extra, children }: SectionCardPro
     </Card>
   );
 }
-

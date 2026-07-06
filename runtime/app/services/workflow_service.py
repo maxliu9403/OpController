@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import BatchRecord, ScheduleRecord, WorkflowFolderRecord, WorkflowTemplateRecord
@@ -212,6 +212,79 @@ class WorkflowService:
         session.add(row)
         await session.flush()
         return row
+
+    async def rename_folder(
+        self,
+        session: AsyncSession,
+        old_name: str,
+        new_name: str,
+        description: str | None = None,
+    ) -> WorkflowFolderRecordOut:
+        old_normalized = self._normalize_folder(old_name)
+        new_normalized = self._normalize_folder(new_name)
+        if old_normalized == "未分组":
+            raise ValueError("默认分组不能重命名")
+        if new_normalized == "未分组":
+            raise ValueError("不能重命名为默认分组")
+        if old_normalized == new_normalized:
+            row = await self.ensure_folder(session, old_normalized, description)
+            return WorkflowFolderRecordOut(
+                id=row.id,
+                name=row.name,
+                description=row.description,
+                workflow_count=await self._folder_workflow_count(session, row.name),
+            )
+
+        conflict = await session.execute(
+            select(WorkflowFolderRecord).where(WorkflowFolderRecord.name == new_normalized)
+        )
+        if conflict.scalar_one_or_none():
+            raise ValueError(f"流程分组已存在: {new_normalized}")
+
+        existing = await session.execute(
+            select(WorkflowFolderRecord).where(WorkflowFolderRecord.name == old_normalized)
+        )
+        row = existing.scalar_one_or_none()
+        if row:
+            row.name = new_normalized
+            row.description = description if description is not None else row.description
+        else:
+            row = WorkflowFolderRecord(name=new_normalized, description=description)
+            session.add(row)
+            await session.flush()
+
+        await session.execute(
+            update(WorkflowTemplateRecord)
+            .where(WorkflowTemplateRecord.folder == old_normalized)
+            .values(folder=new_normalized)
+        )
+        await session.commit()
+        await session.refresh(row)
+        return WorkflowFolderRecordOut(
+            id=row.id,
+            name=row.name,
+            description=row.description,
+            workflow_count=await self._folder_workflow_count(session, row.name),
+        )
+
+    async def delete_folder(self, session: AsyncSession, name: str) -> None:
+        normalized = self._normalize_folder(name)
+        if normalized == "未分组":
+            raise ValueError("默认分组不能删除")
+        await self.ensure_folder(session, "未分组")
+        await session.execute(
+            update(WorkflowTemplateRecord)
+            .where(WorkflowTemplateRecord.folder == normalized)
+            .values(folder="未分组")
+        )
+        await session.execute(delete(WorkflowFolderRecord).where(WorkflowFolderRecord.name == normalized))
+        await session.commit()
+
+    async def _folder_workflow_count(self, session: AsyncSession, name: str) -> int:
+        count = await session.scalar(
+            select(func.count()).select_from(WorkflowTemplateRecord).where(WorkflowTemplateRecord.folder == name)
+        )
+        return int(count or 0)
 
     @staticmethod
     def _to_record(row: WorkflowTemplateRecord) -> WorkflowRecord:

@@ -63,7 +63,6 @@ export function ProvidersPage() {
   const [savingScope, setSavingScope] = useState(false);
   const [draftScope, setDraftScope] = useState<ProviderScope | null>(null);
   const [groupFilter, setGroupFilter] = useState<string | null>(null);
-  const [managedFilter, setManagedFilter] = useState<"all" | "managed" | "unmanaged">("all");
   const [profileSearch, setProfileSearch] = useState("");
   const [selectedProfileIds, setSelectedProfileIds] = useState<Key[]>([]);
 
@@ -111,9 +110,20 @@ export function ProvidersPage() {
   );
 
   const effectiveScope = normalizeScope(draftScope, selectedProviderType);
+  const profileListGroupOptions = useMemo(() => {
+    if (!effectiveScope.is_configured) {
+      return groupOptions;
+    }
+    return groupOptions.filter((option) => effectiveScope.managed_group_ids.includes(String(option.value)));
+  }, [effectiveScope.is_configured, effectiveScope.managed_group_ids, groupOptions]);
+
   const filteredProfiles = useMemo(() => {
     const search = profileSearch.trim().toLowerCase();
     return (profiles.data ?? []).filter((profile) => {
+      const currentGroupId = profileGroupId(profile);
+      if (effectiveScope.is_configured && !effectiveScope.managed_group_ids.includes(currentGroupId)) {
+        return false;
+      }
       if (groupFilter && profileGroupId(profile) !== groupFilter) {
         return false;
       }
@@ -129,16 +139,9 @@ export function ProvidersPage() {
           return false;
         }
       }
-      const result = evaluateDraftManagement(profile, effectiveScope);
-      if (managedFilter === "managed") {
-        return result.managed;
-      }
-      if (managedFilter === "unmanaged") {
-        return !result.managed;
-      }
       return true;
     });
-  }, [effectiveScope, groupFilter, managedFilter, profileSearch, profiles.data]);
+  }, [effectiveScope, groupFilter, profileSearch, profiles.data]);
 
   const managedCount = useMemo(
     () => (profiles.data ?? []).filter((profile) => evaluateDraftManagement(profile, effectiveScope).managed).length,
@@ -148,6 +151,15 @@ export function ProvidersPage() {
   const updateDraftScope = (mutator: (current: ProviderScope) => ProviderScope) => {
     setDraftScope((current) => mutator(normalizeScope(current, selectedProviderType)));
   };
+
+  useEffect(() => {
+    if (!groupFilter) {
+      return;
+    }
+    if (!profileListGroupOptions.some((option) => option.value === groupFilter)) {
+      setGroupFilter(null);
+    }
+  }, [groupFilter, profileListGroupOptions]);
 
   const selectedProfileIdStrings = selectedProfileIds.map(String);
 
@@ -263,7 +275,7 @@ export function ProvidersPage() {
             message={effectiveScope.is_configured ? "当前启用了管理范围" : "当前默认管理全部 Profile"}
             description={
               effectiveScope.is_configured
-                ? "只有命中分组白名单或窗口例外纳入、且未被排除的 Profile，才会进入流程编排、批次和定时任务。"
+                ? "Profile 管理清单只展示管理分组内的窗口；显式排除仍会显示，方便随时恢复。"
                 : "尚未保存自定义范围，所有已同步 Profile 都会被视为可管理。"
             }
           />
@@ -326,7 +338,10 @@ export function ProvidersPage() {
         </Space>
       </SectionCard>
 
-      <SectionCard title="Profile 管理清单" subtitle="按分组、关键词和管理状态过滤，再批量纳入或排除窗口。">
+      <SectionCard
+        title="Profile 管理清单"
+        subtitle={effectiveScope.is_configured ? "这里只展示管理范围配置中的分组 Profile。" : "尚未配置范围，当前展示全部已同步 Profile。"}
+      >
         <Space direction="vertical" size={16} style={{ width: "100%" }}>
           <Space wrap>
             <Select
@@ -335,19 +350,9 @@ export function ProvidersPage() {
               optionFilterProp="label"
               style={{ width: 260 }}
               value={groupFilter ?? undefined}
-              options={groupOptions}
-              placeholder="按分组过滤"
+              options={profileListGroupOptions}
+              placeholder={effectiveScope.is_configured ? "在管理分组内筛选" : "按分组过滤"}
               onChange={(value) => setGroupFilter(value ?? null)}
-            />
-            <Select
-              style={{ width: 160 }}
-              value={managedFilter}
-              options={[
-                { value: "all", label: "全部窗口" },
-                { value: "managed", label: "仅已管理" },
-                { value: "unmanaged", label: "仅未管理" },
-              ]}
-              onChange={setManagedFilter}
             />
             <Input.Search
               allowClear
@@ -356,6 +361,7 @@ export function ProvidersPage() {
               value={profileSearch}
               onChange={(event) => setProfileSearch(event.target.value)}
             />
+            <Tag color="blue">当前清单 {filteredProfiles.length}</Tag>
           </Space>
           <Table
             rowKey="external_profile_id"

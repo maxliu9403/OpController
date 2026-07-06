@@ -39,6 +39,13 @@ class BatchImportResult(BaseModel):
     preview_rows: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class InputFileParseResult(BaseModel):
+    total_rows: int = 0
+    detected_columns: list[str] = Field(default_factory=list)
+    preview_rows: list[dict[str, Any]] = Field(default_factory=list)
+    rows: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class StartBatchRequest(BaseModel):
     workflow_id: str
     provider_type: str

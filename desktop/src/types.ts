@@ -200,6 +200,13 @@ export type BatchDetail = BatchSummary & {
   }>;
 };
 
+export type InputFileParseResult = {
+  total_rows: number;
+  detected_columns: string[];
+  preview_rows: Record<string, unknown>[];
+  rows: Record<string, unknown>[];
+};
+
 export type ScheduleRecord = {
   id: string;
   name: string;

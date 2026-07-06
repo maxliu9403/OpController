@@ -343,6 +343,40 @@ async def create_workflow_folder(
     }
 
 
+@router.put("/workflow-folders/{folder_name:path}")
+async def update_workflow_folder(
+    folder_name: str,
+    payload: dict[str, Any],
+    session: DbSession,
+    runtime: Annotated[RuntimeContext, Depends(get_runtime)],
+):
+    name = payload.get("name")
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+    try:
+        return await runtime.workflow_service.rename_folder(
+            session,
+            folder_name,
+            str(name),
+            payload.get("description"),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete("/workflow-folders/{folder_name:path}")
+async def delete_workflow_folder(
+    folder_name: str,
+    session: DbSession,
+    runtime: Annotated[RuntimeContext, Depends(get_runtime)],
+):
+    try:
+        await runtime.workflow_service.delete_folder(session, folder_name)
+        return {"status": "deleted"}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/workflows/{workflow_id}")
 async def get_workflow(
     workflow_id: str,
@@ -495,6 +529,18 @@ async def import_batch(
         file_name=file.filename or "input.csv",
         content=content,
         provider_type=provider_type,
+    )
+
+
+@router.post("/schedules/input-file/parse")
+async def parse_schedule_input_file(
+    runtime: Annotated[RuntimeContext, Depends(get_runtime)],
+    file: UploadFile = File(...),
+):
+    content = await file.read()
+    return runtime.batch_service.parse_input_file(
+        file_name=file.filename or "input.csv",
+        content=content,
     )
 
 

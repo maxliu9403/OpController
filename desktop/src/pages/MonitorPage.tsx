@@ -1,6 +1,7 @@
-import { Card, Empty, List, Space, Tag, Typography } from "antd";
+import { Empty, List, Space, Tag } from "antd";
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
+import { SectionCard } from "../components/SectionCard";
 
 type MonitorEvent = {
   type: string;
@@ -20,13 +21,8 @@ export function MonitorPage() {
   }, []);
 
   return (
-    <Space direction="vertical" size={24} style={{ width: "100%" }}>
-      <Card className="section-card">
-        <Typography.Title level={3}>运行监控</Typography.Title>
-        <Typography.Paragraph type="secondary">
-          这里展示 sidecar 通过 WebSocket 推送的批次、任务、定时和 Provider 事件流。
-        </Typography.Paragraph>
-      </Card>
+    <Space direction="vertical" size={16} style={{ width: "100%" }}>
+      <SectionCard title="运行监控" subtitle="展示 sidecar 通过 WebSocket 推送的批次、任务、定时和 Provider 事件流。" />
       {events.length ? (
         <List
           dataSource={events}

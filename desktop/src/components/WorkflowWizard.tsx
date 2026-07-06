@@ -1,5 +1,6 @@
-import { Button, Card, Col, Dropdown, Empty, Popconfirm, Row, Space, Tag, Tooltip, Typography } from "antd";
+import { Button, Dropdown, Empty, Popconfirm, Space, Tag, Tooltip, Typography } from "antd";
 import { ArrowDown, ArrowUp, Copy, Pencil, Plus, Trash2 } from "lucide-react";
+import type { ReactNode } from "react";
 import type { WorkflowActionCard } from "../types";
 
 export type WorkflowDraftStep = {
@@ -34,6 +35,7 @@ type WorkflowWizardProps = {
   onDeleteStep: (index: number) => void;
   onDuplicateStep: (index: number) => void;
   onMoveStep: (index: number, direction: "up" | "down") => void;
+  testPanel: ReactNode;
 };
 
 function looksLikeLegacyPageWait(step: WorkflowDraftStep, locator?: Record<string, unknown> | null) {
@@ -101,139 +103,111 @@ export function WorkflowWizard({
   onDeleteStep,
   onDuplicateStep,
   onMoveStep,
+  testPanel,
 }: WorkflowWizardProps) {
   return (
-    <Space direction="vertical" size={20} style={{ width: "100%" }}>
-      <Card className="wizard-hero">
-        <Typography.Title level={3}>面向运营的流程编排</Typography.Title>
-        <Typography.Paragraph>
-          先点动作卡片，再用业务化表单告诉系统“这个元素长什么样”。不需要懂 CSS、XPath，也不需要手写 YAML。
-        </Typography.Paragraph>
-      </Card>
+    <div className="workflow-canvas">
+      <aside className="workflow-canvas__palette">
+        <div className="workflow-panel-heading">
+          <Typography.Text className="section-eyebrow">动作库</Typography.Text>
+          <Typography.Text type="secondary">{cards.length} 个动作</Typography.Text>
+        </div>
+        <div className="workflow-action-list">
+          {cards.map((card) => (
+            <button
+              className="workflow-action-tile"
+              key={card.type}
+              type="button"
+              onClick={() => onSelectCard(card)}
+            >
+              <span>
+                <Tag bordered={false} color="gold">
+                  {card.category}
+                </Tag>
+                <strong>{card.label}</strong>
+              </span>
+              <small>{card.description}</small>
+            </button>
+          ))}
+        </div>
+      </aside>
 
-      <Card className="wizard-rail">
-        <Space direction="vertical" size={12} style={{ width: "100%" }}>
-          <Typography.Text className="section-eyebrow">动作卡片</Typography.Text>
-          <Row gutter={[12, 12]}>
-            {cards.map((card) => (
-              <Col xs={24} md={12} xl={8} key={card.type}>
-                <Card className="action-card" hoverable onClick={() => onSelectCard(card)}>
-                  <Space direction="vertical" size={10}>
-                    <Tag bordered={false} color="gold">
-                      {card.category}
-                    </Tag>
-                    <Typography.Title level={5}>{card.label}</Typography.Title>
-                    <Typography.Paragraph type="secondary">{card.description}</Typography.Paragraph>
-                    <Button type="link" className="action-card__button">
-                      配置这个动作
-                    </Button>
-                  </Space>
-                </Card>
-              </Col>
-            ))}
-          </Row>
-        </Space>
-      </Card>
-
-      <Card className="wizard-rail">
-        <Space direction="vertical" size={14} style={{ width: "100%" }}>
-          <Typography.Text className="section-eyebrow">怎么告诉程序点哪里</Typography.Text>
-          <Typography.Paragraph type="secondary">
-            首版不是让运营同学提供坐标，而是让运营同学描述元素特征。系统会把这些特征自动转换成 LocatorSpec。
-          </Typography.Paragraph>
-          <div className="wizard-guide-grid">
-            <div className="wizard-guide-card">
-              <Typography.Title level={5}>1. 先说这是什么</Typography.Title>
-              <Typography.Paragraph type="secondary">
-                例如：提交按钮、搜索输入框、店铺状态下拉框。
-              </Typography.Paragraph>
-            </div>
-            <div className="wizard-guide-card">
-              <Typography.Title level={5}>2. 再说怎么稳定找到它</Typography.Title>
-              <Typography.Paragraph type="secondary">
-                优先填稳定属性，其次填元素文字，再补邻近文案和列表行业务关键词。
-              </Typography.Paragraph>
-            </div>
-            <div className="wizard-guide-card">
-              <Typography.Title level={5}>3. 让系统自动生成规则</Typography.Title>
-              <Typography.Paragraph type="secondary">
-                系统会自动写入 `selector_key` 和 `locators`，高级 YAML 只是可选查看层。
-              </Typography.Paragraph>
-            </div>
+      <main className="workflow-canvas__flow">
+        <div className="workflow-panel-heading">
+          <div>
+            <Typography.Text className="section-eyebrow">流程画布</Typography.Text>
+            <Typography.Title level={5} style={{ margin: 0 }}>
+              已编排 {steps.length} 个步骤
+            </Typography.Title>
           </div>
-        </Space>
-      </Card>
-
-      <Card className="wizard-rail">
-        <Space direction="vertical" size={14} style={{ width: "100%" }}>
-          <Typography.Text className="section-eyebrow">已编排步骤</Typography.Text>
+          <Tag color={steps.length ? "green" : "default"}>{steps.length ? "可编辑" : "空流程"}</Tag>
+        </div>
+        <div className="workflow-step-scroll">
           {steps.length ? (
-            <Space direction="vertical" size={12} style={{ width: "100%" }}>
-              {steps.map((step, index) => {
-                const locator = step.selector_key ? locators[step.selector_key] : null;
-                const insertMenuItems = cards.map((card) => ({
-                  key: card.type,
-                  label: `${card.label} · ${card.category}`,
-                  onClick: () => onSelectCard(card, { insertAfterIndex: index }),
-                }));
-                return (
-                  <div key={step.id} className="workflow-step-item">
-                    <div className="workflow-step-item__header">
-                      <div className="workflow-step-item__title-row">
-                        <Space wrap>
-                          <Tag color="blue">#{index + 1}</Tag>
-                          <Tag color="gold">{step.type}</Tag>
-                          <Typography.Title level={5} style={{ margin: 0 }}>
-                            {step.label || step.id}
-                          </Typography.Title>
-                        </Space>
-                        <Space size={4} wrap>
-                          <Tooltip title="编辑步骤">
-                            <Button
-                              size="small"
-                              type="text"
-                              icon={<Pencil size={15} />}
-                              onClick={() => onEditStep(index)}
-                            />
-                          </Tooltip>
-                          <Tooltip title="复制步骤">
-                            <Button
-                              size="small"
-                              type="text"
-                              icon={<Copy size={15} />}
-                              onClick={() => onDuplicateStep(index)}
-                            />
-                          </Tooltip>
-                          <Tooltip title="上移">
-                            <Button
-                              size="small"
-                              type="text"
-                              icon={<ArrowUp size={15} />}
-                              disabled={index === 0}
-                              onClick={() => onMoveStep(index, "up")}
-                            />
-                          </Tooltip>
-                          <Tooltip title="下移">
-                            <Button
-                              size="small"
-                              type="text"
-                              icon={<ArrowDown size={15} />}
-                              disabled={index === steps.length - 1}
-                              onClick={() => onMoveStep(index, "down")}
-                            />
-                          </Tooltip>
-                          <Popconfirm
-                            title="删除这个步骤？"
-                            description="删除后会同步更新 YAML，并清理不再使用的定位规则。"
-                            okText="删除"
-                            cancelText="取消"
-                            okButtonProps={{ danger: true }}
-                            onConfirm={() => onDeleteStep(index)}
-                          >
-                            <Button size="small" type="text" danger icon={<Trash2 size={15} />} />
-                          </Popconfirm>
-                        </Space>
-                      </div>
+            steps.map((step, index) => {
+              const locator = step.selector_key ? locators[step.selector_key] : null;
+              const insertMenuItems = cards.map((card) => ({
+                key: card.type,
+                label: `${card.label} · ${card.category}`,
+                onClick: () => onSelectCard(card, { insertAfterIndex: index }),
+              }));
+              return (
+                <div key={step.id} className="workflow-step-item">
+                  <div className="workflow-step-node">{index + 1}</div>
+                  <div className="workflow-step-item__body">
+                    <div className="workflow-step-item__title-row">
+                      <Space wrap>
+                        <Tag color="gold">{step.type}</Tag>
+                        <Typography.Title level={5} style={{ margin: 0 }}>
+                          {step.label || step.id}
+                        </Typography.Title>
+                      </Space>
+                      <Space size={4} wrap>
+                        <Tooltip title="编辑步骤">
+                          <Button
+                            size="small"
+                            type="text"
+                            icon={<Pencil size={15} />}
+                            onClick={() => onEditStep(index)}
+                          />
+                        </Tooltip>
+                        <Tooltip title="复制步骤">
+                          <Button
+                            size="small"
+                            type="text"
+                            icon={<Copy size={15} />}
+                            onClick={() => onDuplicateStep(index)}
+                          />
+                        </Tooltip>
+                        <Tooltip title="上移">
+                          <Button
+                            size="small"
+                            type="text"
+                            icon={<ArrowUp size={15} />}
+                            disabled={index === 0}
+                            onClick={() => onMoveStep(index, "up")}
+                          />
+                        </Tooltip>
+                        <Tooltip title="下移">
+                          <Button
+                            size="small"
+                            type="text"
+                            icon={<ArrowDown size={15} />}
+                            disabled={index === steps.length - 1}
+                            onClick={() => onMoveStep(index, "down")}
+                          />
+                        </Tooltip>
+                        <Popconfirm
+                          title="删除这个步骤？"
+                          description="删除后会同步更新 YAML，并清理不再使用的定位规则。"
+                          okText="删除"
+                          cancelText="取消"
+                          okButtonProps={{ danger: true }}
+                          onConfirm={() => onDeleteStep(index)}
+                        >
+                          <Button size="small" type="text" danger icon={<Trash2 size={15} />} />
+                        </Popconfirm>
+                      </Space>
                     </div>
                     <Typography.Paragraph type="secondary" style={{ marginBottom: 6 }}>
                       {stepSummary(step, locator)}
@@ -242,32 +216,33 @@ export function WorkflowWizard({
                       <Typography.Text type="secondary">
                         主规则: {String(locator.primary_selector ?? "--")} / 稳定性 {String(locator.stability_score ?? "--")}
                       </Typography.Text>
-                        ) : null}
+                    ) : null}
                     <div className="workflow-step-item__insert-row">
-                      <Dropdown
-                        trigger={["click"]}
-                        menu={{ items: insertMenuItems }}
-                        disabled={!cards.length}
-                      >
+                      <Dropdown trigger={["click"]} menu={{ items: insertMenuItems }} disabled={!cards.length}>
                         <Button
                           size="small"
                           type="dashed"
                           icon={<Plus size={14} />}
                           onClick={(event) => event.preventDefault()}
                         >
-                          在第 {index + 1} 步后插入动作
+                          在这里插入动作
                         </Button>
                       </Dropdown>
                     </div>
                   </div>
-                );
-              })}
-            </Space>
+                </div>
+              );
+            })
           ) : (
-            <Empty description="还没有步骤。点击上面的动作卡片，先配置一个可执行动作。" />
+            <Empty
+              className="workflow-empty-state"
+              description="从左侧动作库选择第一个动作，画布会在这里生成步骤。"
+            />
           )}
-        </Space>
-      </Card>
-    </Space>
+        </div>
+      </main>
+
+      <aside className="workflow-canvas__inspector">{testPanel}</aside>
+    </div>
   );
 }
