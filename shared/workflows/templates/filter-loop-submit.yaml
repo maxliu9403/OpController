@@ -1,0 +1,58 @@
+metadata:
+  name: "筛选列表并逐条处理"
+  description: "筛选待处理列表，逐条进入详情并提交"
+  version: "1.0.0"
+inputs:
+  required:
+    - keyword
+    - note
+profile_policy:
+  provider_type: "ixbrowser"
+  selection_mode: "by_group"
+  group_ids: []
+runtime_policy:
+  mode: "visual"
+  min_window_width: 560
+  min_window_height: 760
+  page_timeout_sec: 30
+  step_timeout_sec: 20
+  retry_once_on_failure: true
+  screenshot_on_failure: true
+steps:
+  - id: "open-list"
+    type: "goto"
+    label: "打开任务列表"
+    url: "https://example.internal/tasks"
+  - id: "filter-keyword"
+    type: "fill"
+    label: "输入筛选关键字"
+    selector_key: "task.filter.keyword"
+    value: "${row.keyword}"
+  - id: "apply-filter"
+    type: "click"
+    label: "应用筛选"
+    selector_key: "task.filter.submit"
+  - id: "loop-rows"
+    type: "for_each"
+    label: "遍历结果行"
+    selector_key: "task.table.rows"
+    steps:
+      - id: "open-detail"
+        type: "click"
+        label: "进入详情"
+        selector_key: "task.row.detail"
+      - id: "fill-note"
+        type: "fill"
+        label: "填写备注"
+        selector_key: "task.detail.note"
+        value: "${row.note}"
+      - id: "submit-detail"
+        type: "click"
+        label: "提交操作"
+        selector_key: "task.detail.submit"
+      - id: "wait-toast"
+        type: "wait_text"
+        label: "等待成功提示"
+        selector_key: "global.toast"
+        text: "提交成功"
+

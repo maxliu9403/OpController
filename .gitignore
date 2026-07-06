@@ -1,0 +1,119 @@
+# macOS / Windows
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*.sublime-*
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+logs/
+runtime/logs/
+desktop/src-tauri/logs/
+
+# Node / Vite / TypeScript
+node_modules/
+*/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+dist/
+*/dist/
+*.tsbuildinfo
+desktop/vite.config.js
+desktop/vite.config.d.ts
+vite.config.ts.timestamp-*
+vite.config.js.timestamp-*
+
+# Python
+.venv/
+venv/
+env/
+ENV/
+*/.venv/
+__pycache__/
+*/__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+.hypothesis/
+
+# Runtime local state
+runtime/data/
+runtime/cache/
+runtime/artifacts/
+runtime/exports/
+runtime/.cache/
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.sqlite3-*
+
+# PyInstaller
+build/
+*/build/
+*.spec.bak
+
+# Rust / Tauri
+target/
+*/target/
+desktop/src-tauri/target/
+desktop/src-tauri/gen/
+desktop/src-tauri/target-debug/
+desktop/src-tauri/target-release/
+
+# Packaged desktop artifacts
+*.app/
+*.dmg
+*.pkg
+*.msi
+*.exe
+*.AppImage
+*.deb
+*.rpm
+*.zip
+*.tar.gz
+
+# Generated runtime bundles copied into Tauri targets
+runtime-dist/
+*/runtime-dist/
+
+# Local generated examples and exports
+outputs/
+artifacts/
+exports/
+screenshots/
+downloads/
+
+# Playwright
+playwright-report/
+test-results/
+.playwright/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.bak
+*.backup

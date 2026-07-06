@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "opcontroller-runtime"
+version = "0.1.0"
+description = "Local sidecar runtime for OpController Desktop"
+requires-python = ">=3.12"
+dependencies = [
+  "aiosqlite>=0.20.0",
+  "apscheduler>=3.10.4",
+  "fastapi>=0.116.0",
+  "greenlet>=3.2.4",
+  "httpx>=0.28.1",
+  "openpyxl>=3.1.5",
+  "orjson>=3.10.0",
+  "playwright>=1.61.0",
+  "pydantic>=2.11.0",
+  "pydantic-settings>=2.10.0",
+  "pyyaml>=6.0.2",
+  "python-multipart>=0.0.20",
+  "sqlalchemy>=2.0.41",
+  "uvicorn[standard]>=0.35.0"
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3.5",
+  "pyinstaller>=6.15.0",
+  "pytest-asyncio>=1.1.0"
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

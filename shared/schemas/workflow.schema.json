@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OpController Workflow Definition",
+  "type": "object",
+  "required": [
+    "metadata",
+    "profile_policy",
+    "runtime_policy",
+    "steps"
+  ],
+  "properties": {
+    "metadata": {
+      "type": "object",
+      "required": [
+        "name",
+        "version"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      }
+    },
+    "inputs": {
+      "type": "object"
+    },
+    "profile_policy": {
+      "type": "object",
+      "required": [
+        "provider_type",
+        "selection_mode"
+      ],
+      "properties": {
+        "provider_type": {
+          "type": "string"
+        },
+        "selection_mode": {
+          "type": "string",
+          "enum": [
+            "explicit_profiles",
+            "by_group",
+            "by_tag"
+          ]
+        }
+      }
+    },
+    "runtime_policy": {
+      "type": "object",
+      "required": [
+        "mode",
+        "min_window_width",
+        "min_window_height",
+        "page_timeout_sec",
+        "step_timeout_sec"
+      ],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "visual",
+            "throughput"
+          ]
+        },
+        "min_window_width": {
+          "type": "integer"
+        },
+        "min_window_height": {
+          "type": "integer"
+        },
+        "page_timeout_sec": {
+          "type": "integer"
+        },
+        "step_timeout_sec": {
+          "type": "integer"
+        },
+        "retry_once_on_failure": {
+          "type": "boolean"
+        },
+        "screenshot_on_failure": {
+          "type": "boolean"
+        }
+      }
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/step"
+      }
+    }
+  },
+  "$defs": {
+    "step": {
+      "type": "object",
+      "required": [
+        "id",
+        "type"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "selector_key": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "value": {
+          "type": [
+            "string",
+            "number",
+            "boolean"
+          ]
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/step"
+          }
+        }
+      }
+    }
+  }
+}

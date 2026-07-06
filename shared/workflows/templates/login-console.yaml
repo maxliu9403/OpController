@@ -1,0 +1,44 @@
+metadata:
+  name: "登录并进入工作台"
+  description: "打开登录页，输入账号密码并等待工作台加载"
+  version: "1.0.0"
+inputs:
+  required:
+    - account
+    - password
+profile_policy:
+  provider_type: "ixbrowser"
+  selection_mode: "explicit_profiles"
+  profile_ids: []
+runtime_policy:
+  mode: "visual"
+  min_window_width: 420
+  min_window_height: 720
+  page_timeout_sec: 30
+  step_timeout_sec: 15
+  retry_once_on_failure: true
+  screenshot_on_failure: true
+steps:
+  - id: "open-login"
+    type: "goto"
+    label: "打开登录页面"
+    url: "https://example.internal/login"
+  - id: "fill-account"
+    type: "fill"
+    label: "输入账号"
+    selector_key: "login.account"
+    value: "${row.account}"
+  - id: "fill-password"
+    type: "fill"
+    label: "输入密码"
+    selector_key: "login.password"
+    value: "${row.password}"
+  - id: "submit-login"
+    type: "click"
+    label: "提交登录"
+    selector_key: "login.submit"
+  - id: "wait-dashboard"
+    type: "wait_visible"
+    label: "等待工作台出现"
+    selector_key: "dashboard.header"
+

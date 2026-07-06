@@ -1,0 +1,14 @@
+{
+  "name": "opcontroller",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "desktop"
+  ],
+  "scripts": {
+    "dev:desktop": "npm --workspace desktop run dev",
+    "build:desktop": "npm --workspace desktop run build",
+    "tauri:dev": "npm --workspace desktop run tauri:dev"
+  }
+}
+
