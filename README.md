@@ -1,112 +1,112 @@
 # OpController Desktop
 
-OpController Desktop is a local desktop automation platform for internal operations teams. It connects to fingerprint browsers, lets non-technical operators design reusable workflows, runs visual batch jobs with multiple browser windows, schedules local tasks, and stores execution results for review.
+OpController Desktop 是一个面向公司内部运营团队的本地桌面自动化平台。它用于连接指纹浏览器，帮助非技术运营同事通过可视化动作卡片设计运营流程，批量打开多个浏览器窗口并发执行任务，支持本机定时任务，并在本地保存执行结果用于复盘。
 
-The current V1 implementation focuses on a single-machine desktop app with ixBrowser support and an extensible multi-provider architecture.
+当前 V1 版本定位为单机桌面应用，首个完整接入的指纹浏览器 Provider 是 ixBrowser，同时代码结构已经按多 Provider 扩展方式设计。
 
-## What It Does
+## 核心能力
 
-- Connects to installed fingerprint browsers through local APIs.
-- Syncs provider groups, profiles, tags, proxies, and open sessions.
-- Lets operators build workflows through action cards and a visual element picker.
-- Runs workflows through Playwright over CDP instead of OS-level mouse control.
-- Supports CSV/Excel batch input, profile assignment, slot-based concurrency, and window layout.
-- Supports local schedules through APScheduler.
-- Stores batches, task runs, step runs, screenshots, exports, and logs locally.
-- Provides locator recovery strategies for page navigation, DOM updates, duplicate equivalent elements, and selector drift.
+- 通过本地 API 连接已安装的指纹浏览器。
+- 同步 Provider 分组、Profile、标签、代理和已打开会话。
+- 通过动作卡片和页面元素拾取器设计运营流程。
+- 使用 Playwright over CDP 执行动作，不依赖系统全局鼠标。
+- 支持 CSV/Excel 批量导入、Profile 绑定、槽位并发和窗口布局。
+- 使用 APScheduler 支持本机定时任务。
+- 本地保存批次、任务、步骤、截图、导出结果和日志。
+- 针对页面跳转、DOM 更新、等价重复元素、定位漂移提供运行时恢复策略。
 
-## Architecture
+## 项目结构
 
 ```text
 OpController
-├── desktop/                 Tauri 2 desktop shell and React UI
-│   ├── src/                 React, TypeScript, Ant Design pages/components
-│   └── src-tauri/           Rust desktop bootstrap and bundling config
-├── runtime/                 Python sidecar runtime
-│   ├── app/                 FastAPI API, services, models, providers
-│   ├── tests/               Runtime unit/integration tests
-│   └── packaging/           PyInstaller specs
-├── shared/                  Shared workflow schemas and starter templates
-├── docs/                    Architecture notes
-└── outputs/                 Local generated examples; ignored by Git
+├── desktop/                 Tauri 2 桌面壳与 React 前端
+│   ├── src/                 React、TypeScript、Ant Design 页面和组件
+│   └── src-tauri/           Rust 桌面启动、sidecar 拉起和打包配置
+├── runtime/                 Python sidecar 运行时
+│   ├── app/                 FastAPI API、服务层、模型、Provider
+│   ├── tests/               runtime 单元测试和集成测试
+│   └── packaging/           PyInstaller 打包配置
+├── shared/                  共享 workflow schema 和模板
+├── docs/                    架构文档
+└── outputs/                 本地生成样例，已被 Git 忽略
 ```
 
-Runtime flow:
+启动链路：
 
 ```text
-Tauri app starts
-  -> bootstraps Python sidecar
-  -> health checks http://127.0.0.1:18519/local/v1/health
-  -> sidecar connects to ixBrowser local API
-  -> React UI calls /local/v1/*
-  -> execution service attaches to browser sessions through CDP
+Tauri App 启动
+  -> 拉起 Python sidecar
+  -> 健康检查 http://127.0.0.1:18519/local/v1/health
+  -> sidecar 连接 ixBrowser Local API
+  -> React UI 调用 /local/v1/*
+  -> 执行器通过 CDP 附着到浏览器会话
 ```
 
-Core backend patterns:
+后端核心模式：
 
-- `ProviderRegistry` and provider adapters isolate fingerprint browser implementations.
-- `IxBrowserProvider` is the first production adapter.
-- `WorkflowDefinition` stores YAML DSL plus normalized JSON.
-- `ExecutionService` handles workflow preview and real task execution.
-- `BatchService` creates `Batch -> BatchRow -> TaskRun -> StepRun`.
-- `ScheduleService` turns schedules into real batches.
+- `ProviderRegistry` 和 Provider Adapter 隔离不同指纹浏览器实现。
+- `IxBrowserProvider` 是当前首个生产级 Provider。
+- `WorkflowDefinition` 保存 YAML DSL 和规范化 JSON。
+- `ExecutionService` 负责流程试运行和真实任务执行。
+- `BatchService` 创建 `Batch -> BatchRow -> TaskRun -> StepRun`。
+- `ScheduleService` 将定时计划转换为真实 Batch 执行。
 
-## Tech Stack
+## 技术栈
 
-- Desktop: `Tauri 2`, Rust, React, TypeScript, Vite, Ant Design.
-- Runtime: Python `>=3.12`, FastAPI, SQLAlchemy, SQLite WAL, APScheduler, Playwright, PyInstaller.
-- Browser automation: Playwright over CDP attached to fingerprint browser debug endpoints.
-- First provider: ixBrowser Local API, default `http://127.0.0.1:53200`.
+- 桌面端：`Tauri 2`、Rust、React、TypeScript、Vite、Ant Design。
+- Runtime：Python `>=3.12`、FastAPI、SQLAlchemy、SQLite WAL、APScheduler、Playwright、PyInstaller。
+- 浏览器自动化：Playwright over CDP，附着到指纹浏览器返回的调试端点。
+- 首个 Provider：ixBrowser Local API，默认地址 `http://127.0.0.1:53200`。
 
-## Prerequisites
+## 环境要求
 
-### Common
+### 通用要求
 
 - Git
-- Node.js 20+ and npm
-- Python 3.12+; local development currently also works with Python 3.14
+- Node.js 20+ 和 npm
+- Python 3.12+，当前本地开发也兼容 Python 3.14
 - Rust stable toolchain
-- A supported fingerprint browser installed locally
-- ixBrowser Local API enabled when using the ixBrowser provider
+- 本机已安装支持的指纹浏览器
+- 使用 ixBrowser 时，需要启用 ixBrowser Local API
 
 ### macOS
 
-Install common tooling:
+安装常用工具：
 
 ```bash
 brew install node python@3.12 rust
 ```
 
-If you use a newer Homebrew Python, create the virtual environment with that interpreter consistently.
+如果使用更新版本的 Homebrew Python，也可以，但建议创建虚拟环境和后续构建始终使用同一个 Python 版本。
 
 ### Windows
 
-Install:
+需要安装：
 
-- Node.js 20+ from the official installer or `winget`.
-- Python 3.12+ with "Add python.exe to PATH".
-- Rust through `rustup`.
-- Microsoft Visual Studio Build Tools with "Desktop development with C++".
-- WebView2 Runtime if it is not already installed.
+- Node.js 20+，可从官网安装或使用 `winget`。
+- Python 3.12+，安装时勾选 "Add python.exe to PATH"。
+- Rust，通过 `rustup` 安装。
+- Microsoft Visual Studio Build Tools，并安装 "Desktop development with C++"。
+- WebView2 Runtime，如果系统尚未安装。
 
-Recommended Windows shell: PowerShell.
+Windows 推荐使用 PowerShell 执行命令。
 
-## Fresh Setup
+## 首次安装
 
-Clone the repository:
+克隆仓库：
 
 ```bash
 git clone git@github.com:maxliu9403/OpController.git
 cd OpController
 ```
 
-Install frontend dependencies:
+安装前端依赖：
 
 ```bash
 npm install
 ```
 
-Create and install the Python runtime:
+创建并安装 Python runtime：
 
 ```bash
 cd runtime
@@ -117,7 +117,7 @@ python -m playwright install chromium
 cd ..
 ```
 
-On Windows:
+Windows：
 
 ```powershell
 cd runtime
@@ -128,9 +128,9 @@ python -m playwright install chromium
 cd ..
 ```
 
-## Development
+## 本地开发
 
-Run the Python sidecar:
+启动 Python sidecar：
 
 ```bash
 cd runtime
@@ -138,90 +138,90 @@ source .venv/bin/activate
 python -m app.main
 ```
 
-Run the React UI:
+启动 React UI：
 
 ```bash
 npm run dev:desktop
 ```
 
-The development UI talks to:
+开发模式 UI 默认访问 runtime：
 
 ```text
 http://127.0.0.1:18519/local/v1
 ```
 
-Run the Tauri desktop shell in development mode:
+启动 Tauri 桌面壳开发模式：
 
 ```bash
 npm --workspace desktop run tauri:dev
 ```
 
-The Tauri shell can launch the runtime in three ways:
+Tauri 壳会按以下优先级查找并启动 runtime：
 
-- Packaged binary under app resources.
-- Workspace binary under `runtime/dist/opcontroller-runtime`.
-- Development Python launcher under `runtime/.venv`.
+- App resources 中的已打包 runtime 二进制文件。
+- 工作区 `runtime/dist/opcontroller-runtime` 下的 runtime 二进制文件。
+- 开发环境 `runtime/.venv` 下的 Python launcher。
 
-## Build
+## 构建与打包
 
-### Build Frontend Only
+### 仅构建前端
 
 ```bash
 npm run build:desktop
 ```
 
-### Build Python Runtime Sidecar
+### 构建 Python Runtime Sidecar
 
-macOS:
+macOS：
 
 ```bash
 npm --workspace desktop run build:runtime:mac
 ```
 
-This runs:
+等价于：
 
 ```bash
 cd runtime
 ./.venv/bin/pyinstaller packaging/opcontroller-runtime.spec --noconfirm
 ```
 
-Expected output:
+预期输出：
 
 ```text
 runtime/dist/opcontroller-runtime/opcontroller-runtime
 ```
 
-Windows:
+Windows：
 
 ```powershell
 cd runtime
 .\.venv\Scripts\pyinstaller.exe packaging\opcontroller-runtime.spec --noconfirm
 ```
 
-Expected output:
+预期输出：
 
 ```text
 runtime/dist/opcontroller-runtime/opcontroller-runtime.exe
 ```
 
-### Build macOS App
+### 构建 macOS App
 
 ```bash
 npm --workspace desktop run build:mac
 ```
 
-Expected outputs:
+预期输出：
 
 ```text
 desktop/src-tauri/target/release/bundle/macos/OpController.app
 desktop/src-tauri/target/release/bundle/dmg/OpController_0.1.0_aarch64.dmg
 ```
 
-For Intel macOS, build on an x64 machine or configure the Rust target and signing pipeline explicitly.
+如果需要构建 Intel macOS 版本，建议在 x64 Mac 上构建，或额外配置 Rust target、签名和打包链路。
 
-### Build Windows App
+### 构建 Windows App
 
-Run on Windows:
+在 Windows 上执行：
 
 ```powershell
 npm install
@@ -238,36 +238,36 @@ cd ..
 npm --workspace desktop exec tauri build
 ```
 
-Expected outputs are under:
+输出目录：
 
 ```text
 desktop/src-tauri/target/release/bundle/
 ```
 
-The exact installer type depends on the Tauri bundle configuration and Windows toolchain.
+具体安装包类型取决于 Tauri bundle 配置和 Windows 本机工具链。
 
-## Environment Variables
+## 环境变量
 
-Runtime settings use the `OPCTRL_` prefix.
+Runtime 配置统一使用 `OPCTRL_` 前缀。
 
-| Variable | Default | Description |
+| 变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `OPCTRL_HOST` | `127.0.0.1` | Local sidecar host. |
-| `OPCTRL_PORT` | `18519` | Local sidecar port. |
-| `OPCTRL_BASE_DIR` | `~/.opcontroller` in direct runtime mode | Runtime data root. Tauri overrides this to the app local data directory. |
-| `OPCTRL_APP_ROOT` | unset | App/resource root used by packaged runtime. |
-| `OPCTRL_TIMEZONE` | `Asia/Shanghai` | Scheduler timezone. |
-| `OPCTRL_PROVIDER_DEFAULT_TYPE` | `ixbrowser` | Default provider type. |
-| `OPCTRL_IXBROWSER_API_BASE` | `http://127.0.0.1:53200` | ixBrowser Local API base URL. |
-| `OPCTRL_IXBROWSER_API_TIMEOUT_SEC` | `10` | ixBrowser Local API timeout. |
-| `OPCTRL_DEFAULT_SLOT_LIMIT` | `6` | Default visual concurrency slot limit. |
-| `OPCTRL_MAX_SLOT_LIMIT` | `10` | Hard slot cap for local visual runs. |
-| `OPCTRL_PROVIDER_OPEN_TIMEOUT_SEC` | `60` | Profile open timeout. |
-| `OPCTRL_PROVIDER_CLOSE_TIMEOUT_SEC` | `15` | Profile close timeout. |
-| `OPCTRL_BROWSER_ATTACH_TIMEOUT_SEC` | `25` | CDP attach timeout. |
-| `OPCTRL_WINDOW_LAYOUT_TIMEOUT_SEC` | `6` | Window layout timeout. |
+| `OPCTRL_HOST` | `127.0.0.1` | 本地 sidecar 监听地址。 |
+| `OPCTRL_PORT` | `18519` | 本地 sidecar 端口。 |
+| `OPCTRL_BASE_DIR` | 直接运行 runtime 时为 `~/.opcontroller` | runtime 数据根目录。Tauri 打包运行时会覆盖为 App 本地数据目录。 |
+| `OPCTRL_APP_ROOT` | 未设置 | 打包 runtime 使用的 App/resource 根目录。 |
+| `OPCTRL_TIMEZONE` | `Asia/Shanghai` | 定时任务时区。 |
+| `OPCTRL_PROVIDER_DEFAULT_TYPE` | `ixbrowser` | 默认 Provider 类型。 |
+| `OPCTRL_IXBROWSER_API_BASE` | `http://127.0.0.1:53200` | ixBrowser Local API 地址。 |
+| `OPCTRL_IXBROWSER_API_TIMEOUT_SEC` | `10` | ixBrowser Local API 超时时间。 |
+| `OPCTRL_DEFAULT_SLOT_LIMIT` | `6` | 默认可视化并发槽位数。 |
+| `OPCTRL_MAX_SLOT_LIMIT` | `10` | 单机可视化运行硬上限。 |
+| `OPCTRL_PROVIDER_OPEN_TIMEOUT_SEC` | `60` | Profile 打开超时。 |
+| `OPCTRL_PROVIDER_CLOSE_TIMEOUT_SEC` | `15` | Profile 关闭超时。 |
+| `OPCTRL_BROWSER_ATTACH_TIMEOUT_SEC` | `25` | CDP 附着超时。 |
+| `OPCTRL_WINDOW_LAYOUT_TIMEOUT_SEC` | `6` | 窗口布局超时。 |
 
-Example:
+示例：
 
 ```bash
 OPCTRL_IXBROWSER_API_BASE=http://127.0.0.1:53200 \
@@ -275,139 +275,139 @@ OPCTRL_BASE_DIR="$HOME/.opcontroller-dev" \
 python -m app.main
 ```
 
-Frontend development can override the runtime origin:
+前端开发时可覆盖 runtime 地址：
 
 ```bash
 VITE_RUNTIME_ORIGIN=http://127.0.0.1:18519 npm run dev:desktop
 ```
 
-## Local Data
+## 本地数据目录
 
-Packaged Tauri app stores runtime data under the app local data directory:
+Tauri 打包应用会把 runtime 数据保存到 App 本地数据目录。
 
-- macOS: `~/Library/Application Support/com.max.opcontroller/runtime`
-- Windows: `%LOCALAPPDATA%\com.max.opcontroller\runtime`
+- macOS：`~/Library/Application Support/com.max.opcontroller/runtime`
+- Windows：`%LOCALAPPDATA%\com.max.opcontroller\runtime`
 
-Inside that directory:
+目录内容：
 
 ```text
-data/app.db       SQLite database
-logs/             sidecar and desktop bootstrap logs
-artifacts/        screenshots and workflow artifacts
-exports/          batch exports
-cache/            runtime cache
+data/app.db       SQLite 数据库
+logs/             sidecar 和桌面启动日志
+artifacts/        截图和流程执行产物
+exports/          批次导出文件
+cache/            runtime 缓存
 ```
 
-These files are intentionally ignored by Git.
+这些文件均不应提交到 Git。
 
-## ixBrowser Setup
+## ixBrowser 配置
 
-1. Install and sign in to ixBrowser.
-2. Enable Local API.
-3. Keep the local API running on the configured port, default `53200`.
-4. Sync profiles from the Provider page.
-5. Configure provider scope if only some groups/profiles should be managed.
-6. Open a test profile before using element picking or workflow dry run.
+1. 安装并登录 ixBrowser。
+2. 启用 ixBrowser Local API。
+3. 确认 Local API 运行在配置端口，默认 `53200`。
+4. 在 Provider 页面同步 Profile。
+5. 如果只希望管理部分分组或窗口，在 Provider 页面配置管理范围。
+6. 使用页面元素拾取和流程试运行前，需要先打开一个测试 Profile。
 
-If a profile is already open but ixBrowser does not return a debug endpoint, close the profile in ixBrowser and open it again through OpController.
+如果 Profile 已经在 ixBrowser 中打开，但 ixBrowser 没有返回可附着的调试端点，先在 ixBrowser 中关闭该 Profile，再通过 OpController 重新打开。
 
-## Workflow Authoring Notes
+## 流程编排说明
 
-The workflow editor stores YAML, but operators normally use action cards.
+流程底层保存为 YAML，但运营同事通常不需要直接写 YAML，而是通过动作卡片完成配置。
 
-Important runtime behaviors:
+关键运行时行为：
 
-- Clicks are humanized and use Playwright over CDP.
-- Same-tab navigation after click is detected and waited for automatically.
-- Page readiness can be modeled with `wait` nodes.
-- Scroll nodes are segmented and include random pauses.
-- If a locator matches duplicate equivalent elements, such as two identical `View Closet` links pointing to the same closet, the executor picks the first visible equivalent target.
-- If duplicates point to different business targets, execution still fails with `locator_ambiguous` to avoid unsafe clicks.
+- 点击、输入、滚动都带拟人化节奏。
+- 点击后如果发生同标签页跳转，系统会自动检测 URL 变化并等待页面稳定。
+- 页面就绪可通过 `wait` 节点建模。
+- 滚动节点采用分段滚动、随机停留和轻微回看。
+- 如果定位规则命中多个等价元素，例如两个 `View Closet` 链接都指向同一个卖家橱窗，执行器会选择第一个可见等价元素继续执行。
+- 如果多个元素指向不同业务目标，系统仍会返回 `locator_ambiguous`，避免误点。
 
-## Tests
+## 测试
 
-Run all runtime tests:
+运行 runtime 全量测试：
 
 ```bash
 runtime/.venv/bin/python -m pytest runtime/tests -q
 ```
 
-Compile-check runtime:
+检查 runtime 编译：
 
 ```bash
 python3 -m compileall runtime/app
 ```
 
-Build-check frontend:
+检查前端构建：
 
 ```bash
 npm run build:desktop
 ```
 
-## Git Hygiene
+## Git 管理规范
 
-The repository should include source files, lockfiles, schemas, and documentation.
+仓库应提交源码、锁文件、schema、模板和文档。
 
-Do not commit:
+不要提交：
 
 - `node_modules`
-- Python virtual environments
-- PyInstaller `build`/`dist`
+- Python 虚拟环境
+- PyInstaller `build` / `dist`
 - Tauri `target`
-- `.app`, `.dmg`, `.msi`, `.exe` installers
-- SQLite databases
-- screenshots, exports, logs, generated Excel files
-- local `.env` files
+- `.app`、`.dmg`、`.msi`、`.exe` 等安装包
+- SQLite 数据库
+- 截图、导出结果、日志、生成的 Excel 文件
+- 本地 `.env` 文件
 
-## Troubleshooting
+## 常见问题
 
-### Runtime Is Not Ready
+### Runtime 尚未就绪
 
-Check:
+检查健康接口：
 
 ```bash
 curl http://127.0.0.1:18519/local/v1/health
 ```
 
-Then inspect logs:
+然后查看日志：
 
 ```text
 ~/Library/Application Support/com.max.opcontroller/runtime/logs/
 ```
 
-### Port 18519 Is Occupied
+### 18519 端口被占用
 
-Another runtime may already be running. Quit OpController fully or stop the process using that port.
+可能已有 runtime 进程在运行。请完全退出 OpController，或停止占用该端口的进程。
 
 ### ixBrowser Server Busy
 
-ixBrowser Local API may reject parallel requests. Wait a few seconds, reduce concurrency, or restart ixBrowser.
+ixBrowser Local API 可能拒绝并发请求。等待几秒、降低并发槽位，或重启 ixBrowser。
 
-### Missing Debug Endpoint
+### 缺少 Debug Endpoint
 
-Close the profile in ixBrowser and reopen it through OpController so the provider returns a CDP endpoint.
+关闭 ixBrowser 中已打开的 Profile，再通过 OpController 打开，让 Provider 返回 CDP 调试端点。
 
-### Build App Does Not Include Runtime
+### 打包后的 App 没有包含 Runtime
 
-Build the runtime first:
+先构建 runtime：
 
 ```bash
 npm --workspace desktop run build:runtime:mac
 ```
 
-Then run:
+再构建 macOS App：
 
 ```bash
 npm --workspace desktop run build:mac
 ```
 
-## Current Scope
+## 当前边界
 
-V1 is a local single-machine product. It does not yet provide:
+V1 是本地单机产品，暂不包含：
 
-- Distributed multi-node scheduling.
-- Provider plugin marketplace.
-- Enterprise IM or email notification pipeline.
-- System wakeup for missed schedules.
+- 分布式多机器调度。
+- Provider 插件市场。
+- 企业 IM 或邮件通知主链路。
+- 系统唤醒后的自动补跑。
 
-The codebase is intentionally structured so these capabilities can be added behind provider, scheduler, and runtime service boundaries.
+当前代码已经按 Provider、调度器、执行器和 runtime service 边界拆分，后续可以在这些边界后继续扩展。
