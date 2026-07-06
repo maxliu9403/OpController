@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import math
 import platform
+import re
 import subprocess
 import csv
 import io
@@ -235,7 +236,9 @@ class BatchService:
                 }
                 await session.commit()
                 return
-            slot_limit = max(1, min(requested_slots, settings.max_slot_limit, len(profiles), len(rows)))
+            screen_bounds = await self._read_screen_bounds()
+            screen_capacity = self._estimate_visual_slot_capacity(screen_bounds)
+            slot_limit = max(1, min(requested_slots, settings.max_slot_limit, screen_capacity, len(profiles), len(rows)))
             batch.status = BatchStatus.RUNNING
             await session.commit()
             assignments = cycle(profiles)
@@ -270,6 +273,7 @@ class BatchService:
                     active_count=len(sessions),
                     slot_limit=slot_limit,
                     runtime_policy=workflow.runtime_policy.model_dump(),
+                    screen_bounds=screen_bounds,
                 )
                 native_ok = True
                 native_error = None
@@ -282,6 +286,7 @@ class BatchService:
                         sessions=sessions,
                         slot_limit=slot_limit,
                         runtime_policy=workflow.runtime_policy.model_dump(),
+                        screen_bounds=screen_bounds,
                     )
                 await self.monitor.publish(
                     "batch.layout",
@@ -416,20 +421,44 @@ class BatchService:
         active_count: int,
         slot_limit: int,
         runtime_policy: dict[str, Any],
+        screen_bounds: tuple[int, int, int, int] | None = None,
     ) -> dict[str, int]:
         per_line = max(1, math.ceil(math.sqrt(max(active_count, slot_limit))))
+        rows = max(1, math.ceil(max(active_count, slot_limit) / per_line))
+        preferred_width = max(
+            settings.window_layout_min_width,
+            int(runtime_policy.get("min_window_width") or settings.window_layout_default_width),
+        )
+        preferred_height = max(
+            settings.window_layout_min_height,
+            int(runtime_policy.get("min_window_height") or settings.window_layout_default_height),
+        )
+        width = preferred_width
+        height = preferred_height
+        if screen_bounds:
+            left, top, right, bottom = screen_bounds
+            usable_width = max(1, right - left - (settings.window_layout_margin_px * (per_line + 1)))
+            usable_height = max(
+                1,
+                bottom
+                - top
+                - settings.window_layout_bottom_reserved_px
+                - (settings.window_layout_margin_px * (rows + 1)),
+            )
+            width = max(settings.window_layout_min_width, min(preferred_width, int(usable_width / per_line)))
+            height = max(settings.window_layout_min_height, min(preferred_height, int(usable_height / rows)))
         return {
-            "screen": 0,
+            "screen": settings.window_layout_screen_index,
             "layout": 1,
             "adaptive": 1,
-            "starting_position_x": 10,
-            "starting_position_y": 10,
-            "profile_size_width": max(320, int(runtime_policy.get("min_window_width") or 500)),
-            "profile_size_hight": max(360, int(runtime_policy.get("min_window_height") or 500)),
-            "profile_spacing_horizontal": 10,
-            "profile_spacing_vertical": 10,
-            "profile_deviaton_x": 50,
-            "profile_deviaton_y": 50,
+            "starting_position_x": settings.window_layout_margin_px,
+            "starting_position_y": settings.window_layout_margin_px,
+            "profile_size_width": width,
+            "profile_size_hight": height,
+            "profile_spacing_horizontal": settings.window_layout_margin_px,
+            "profile_spacing_vertical": settings.window_layout_margin_px,
+            "profile_deviaton_x": settings.window_layout_provider_deviation_px,
+            "profile_deviaton_y": settings.window_layout_provider_deviation_px,
             "per_line_number_of_profiles": per_line,
         }
 
@@ -439,6 +468,7 @@ class BatchService:
         sessions: list[ProviderSessionRef],
         slot_limit: int,
         runtime_policy: dict[str, Any],
+        screen_bounds: tuple[int, int, int, int] | None = None,
     ) -> None:
         if platform.system() != "Darwin":
             return
@@ -448,8 +478,9 @@ class BatchService:
         script = self._build_macos_layout_script(
             pids=pids,
             slot_limit=slot_limit,
-            min_width=max(320, int(runtime_policy.get("min_window_width") or 420)),
-            min_height=max(360, int(runtime_policy.get("min_window_height") or 720)),
+            min_width=settings.window_layout_min_width,
+            min_height=settings.window_layout_min_height,
+            screen_bounds=screen_bounds,
         )
         try:
             await asyncio.to_thread(
@@ -470,28 +501,42 @@ class BatchService:
         slot_limit: int,
         min_width: int,
         min_height: int,
+        screen_bounds: tuple[int, int, int, int] | None = None,
     ) -> str:
         pid_list = ", ".join(str(pid) for pid in pids)
         columns = max(1, math.ceil(math.sqrt(max(len(pids), slot_limit))))
         rows = max(1, math.ceil(max(len(pids), slot_limit) / columns))
+        screen_init = ""
+        if screen_bounds:
+            left, top, right, bottom = screen_bounds
+            screen_init = f"""
+set screenLeft to {left}
+set screenTop to {top}
+set screenRight to {right}
+set screenBottom to {bottom}
+"""
+        else:
+            screen_init = """
+tell application "Finder" to set screenBounds to bounds of window of desktop
+set screenLeft to item 1 of screenBounds
+set screenTop to item 2 of screenBounds
+set screenRight to item 3 of screenBounds
+set screenBottom to item 4 of screenBounds
+"""
         return f"""
 set targetPids to {{{pid_list}}}
 set columnsCount to {columns}
 set rowsCount to {rows}
 set minWidth to {min_width}
 set minHeight to {min_height}
-set marginSize to 10
-tell application "Finder" to set screenBounds to bounds of window of desktop
-set screenLeft to item 1 of screenBounds
-set screenTop to item 2 of screenBounds
-set screenRight to item 3 of screenBounds
-set screenBottom to item 4 of screenBounds
+set marginSize to {settings.window_layout_margin_px}
+{screen_init}
 set usableWidth to screenRight - screenLeft - (marginSize * (columnsCount + 1))
-set usableHeight to screenBottom - screenTop - 40 - (marginSize * (rowsCount + 1))
+set usableHeight to screenBottom - screenTop - {settings.window_layout_bottom_reserved_px} - (marginSize * (rowsCount + 1))
 set cellWidth to usableWidth / columnsCount
 set cellHeight to usableHeight / rowsCount
-if cellWidth < minWidth then set cellWidth to minWidth
-if cellHeight < minHeight then set cellHeight to minHeight
+if cellWidth < minWidth and ((minWidth * columnsCount) + (marginSize * (columnsCount + 1))) <= (screenRight - screenLeft) then set cellWidth to minWidth
+if cellHeight < minHeight and ((minHeight * rowsCount) + (marginSize * (rowsCount + 1)) + {settings.window_layout_bottom_reserved_px}) <= (screenBottom - screenTop) then set cellHeight to minHeight
 tell application "System Events"
   set targetWindows to {{}}
   repeat with p in processes
@@ -514,6 +559,50 @@ tell application "System Events"
   end repeat
 end tell
 """
+
+    async def _read_screen_bounds(self) -> tuple[int, int, int, int] | None:
+        if platform.system() != "Darwin":
+            return None
+        try:
+            result = await asyncio.to_thread(
+                subprocess.run,
+                ["osascript", "-e", 'tell application "Finder" to get bounds of window of desktop'],
+                capture_output=True,
+                text=True,
+                timeout=settings.window_layout_timeout_sec,
+                check=False,
+            )
+        except Exception:  # noqa: BLE001
+            return None
+        if result.returncode != 0:
+            return None
+        numbers = [int(item) for item in re.findall(r"-?\d+", result.stdout)]
+        if len(numbers) < 4:
+            return None
+        left, top, right, bottom = numbers[:4]
+        if right <= left or bottom <= top:
+            return None
+        return left, top, right, bottom
+
+    @staticmethod
+    def _estimate_visual_slot_capacity(screen_bounds: tuple[int, int, int, int] | None) -> int:
+        if not screen_bounds:
+            return settings.max_slot_limit
+        left, top, right, bottom = screen_bounds
+        usable_width = max(1, right - left - settings.window_layout_margin_px)
+        usable_height = max(
+            1,
+            bottom - top - settings.window_layout_bottom_reserved_px - settings.window_layout_margin_px,
+        )
+        columns = max(
+            1,
+            usable_width // (settings.window_layout_min_width + settings.window_layout_margin_px),
+        )
+        rows = max(
+            1,
+            usable_height // (settings.window_layout_min_height + settings.window_layout_margin_px),
+        )
+        return max(1, min(settings.max_slot_limit, int(columns * rows)))
 
     async def _resolve_profiles(
         self,

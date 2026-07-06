@@ -254,6 +254,7 @@ Runtime 配置统一使用 `OPCTRL_` 前缀。
 | --- | --- | --- |
 | `OPCTRL_HOST` | `127.0.0.1` | 本地 sidecar 监听地址。 |
 | `OPCTRL_PORT` | `18519` | 本地 sidecar 端口。 |
+| `OPCTRL_API_TOKEN` | 未设置 | 本地 API 访问令牌。桌面壳会自动生成并注入；手动运行 runtime 时可设置它来保护本地接口。 |
 | `OPCTRL_BASE_DIR` | 直接运行 runtime 时为 `~/.opcontroller` | runtime 数据根目录。Tauri 打包运行时会覆盖为 App 本地数据目录。 |
 | `OPCTRL_APP_ROOT` | 未设置 | 打包 runtime 使用的 App/resource 根目录。 |
 | `OPCTRL_TIMEZONE` | `Asia/Shanghai` | 定时任务时区。 |
@@ -266,6 +267,9 @@ Runtime 配置统一使用 `OPCTRL_` 前缀。
 | `OPCTRL_PROVIDER_CLOSE_TIMEOUT_SEC` | `15` | Profile 关闭超时。 |
 | `OPCTRL_BROWSER_ATTACH_TIMEOUT_SEC` | `25` | CDP 附着超时。 |
 | `OPCTRL_WINDOW_LAYOUT_TIMEOUT_SEC` | `6` | 窗口布局超时。 |
+| `OPCTRL_WINDOW_LAYOUT_MIN_WIDTH` | `320` | 可视化平铺时单个窗口允许缩放到的最小宽度。 |
+| `OPCTRL_WINDOW_LAYOUT_MIN_HEIGHT` | `360` | 可视化平铺时单个窗口允许缩放到的最小高度。 |
+| `OPCTRL_WINDOW_LAYOUT_MARGIN_PX` | `10` | 平铺窗口之间和屏幕边缘的间距。 |
 
 示例：
 

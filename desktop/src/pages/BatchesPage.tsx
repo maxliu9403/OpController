@@ -1,6 +1,6 @@
 import { Button, Form, InputNumber, Select, Space, Spin, Table, Tag, Upload, message } from "antd";
 import { UploadCloud } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
 import { SectionCard } from "../components/SectionCard";
 import { usePolling } from "../hooks/usePolling";
@@ -23,6 +23,12 @@ export function BatchesPage() {
     [workflows.data],
   );
 
+  useEffect(() => {
+    if (!form.getFieldValue("provider_type") && providers.data?.length) {
+      form.setFieldValue("provider_type", providers.data[0].provider_type);
+    }
+  }, [form, providers.data]);
+
   const importProps = {
     maxCount: 1,
     beforeUpload: () => false,
@@ -39,7 +45,11 @@ export function BatchesPage() {
     }
     setUploading(true);
     try {
-      const result = await api.importBatch(file, form.getFieldValue("provider_type") ?? "ixbrowser");
+      const providerType = form.getFieldValue("provider_type");
+      if (!providerType) {
+        throw new Error("请先选择 Provider");
+      }
+      const result = await api.importBatch(file, providerType);
       setSelectedBatchId(result.batch.id);
       message.success(`已导入 ${result.batch.total_rows} 行数据`);
     } catch (cause) {
@@ -81,7 +91,7 @@ export function BatchesPage() {
         <Form
           form={form}
           layout="vertical"
-          initialValues={{ provider_type: "ixbrowser", requested_slots: 6 }}
+          initialValues={{ requested_slots: 6 }}
         >
           <Space align="start" size={24} wrap>
             <Form.Item label="Provider" name="provider_type">

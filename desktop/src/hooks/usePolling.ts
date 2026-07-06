@@ -7,6 +7,7 @@ export function usePolling<T>(factory: () => Promise<T>, intervalMs = 8000) {
 
   useEffect(() => {
     let mounted = true;
+    let timer: number | undefined;
 
     const load = async () => {
       try {
@@ -24,16 +25,19 @@ export function usePolling<T>(factory: () => Promise<T>, intervalMs = 8000) {
           setLoading(false);
         }
       }
+      if (mounted) {
+        timer = window.setTimeout(() => void load(), intervalMs);
+      }
     };
 
     void load();
-    const timer = window.setInterval(() => void load(), intervalMs);
     return () => {
       mounted = false;
-      window.clearInterval(timer);
+      if (timer !== undefined) {
+        window.clearTimeout(timer);
+      }
     };
   }, [factory, intervalMs]);
 
   return { data, loading, error };
 }
-

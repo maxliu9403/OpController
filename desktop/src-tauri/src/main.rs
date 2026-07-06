@@ -8,10 +8,20 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use rand::RngCore;
+use serde::Serialize;
 use tauri::{AppHandle, Manager, RunEvent};
 
-const RUNTIME_HOST: &str = "127.0.0.1";
-const RUNTIME_PORT: u16 = 18519;
+const DEFAULT_RUNTIME_HOST: &str = "127.0.0.1";
+const DEFAULT_RUNTIME_PORT: u16 = 18519;
+const TOKEN_BYTES: usize = 32;
+const TOKEN_FILE_NAME: &str = "runtime.token";
+
+#[derive(Clone, Serialize)]
+struct RuntimeClientConfig {
+    origin: String,
+    token: String,
+}
 
 struct RuntimeLaunchPlan {
     program: PathBuf,
@@ -24,13 +34,15 @@ struct RuntimeLaunchPlan {
 struct RuntimeSidecarState {
     child: Mutex<Option<Child>>,
     boot_error: Mutex<Option<String>>,
+    client_config: RuntimeClientConfig,
 }
 
 impl RuntimeSidecarState {
-    fn new() -> Self {
+    fn new(client_config: RuntimeClientConfig) -> Self {
         Self {
             child: Mutex::new(None),
             boot_error: Mutex::new(None),
+            client_config,
         }
     }
 
@@ -56,13 +68,31 @@ impl RuntimeSidecarState {
     }
 }
 
+#[tauri::command]
+fn runtime_config(state: tauri::State<'_, RuntimeSidecarState>) -> RuntimeClientConfig {
+    state.client_config.clone()
+}
+
 fn main() {
     let app = tauri::Builder::default()
+        .invoke_handler(tauri::generate_handler![runtime_config])
         .setup(|app| {
             let log_dir = resolve_log_dir(app.handle());
-            let state = RuntimeSidecarState::new();
+            let runtime_host = configured_runtime_host();
+            let runtime_port = configured_runtime_port();
+            let runtime_token = resolve_runtime_token(app.handle(), &log_dir);
+            let state = RuntimeSidecarState::new(RuntimeClientConfig {
+                origin: format!("http://{runtime_host}:{runtime_port}"),
+                token: runtime_token.clone(),
+            });
 
-            match bootstrap_runtime(app.handle(), &log_dir) {
+            match bootstrap_runtime(
+                app.handle(),
+                &log_dir,
+                &runtime_host,
+                runtime_port,
+                &runtime_token,
+            ) {
                 Ok(Some(child)) => state.set_child(child),
                 Ok(None) => {}
                 Err(error) => {
@@ -86,27 +116,46 @@ fn main() {
     });
 }
 
-fn bootstrap_runtime(app: &AppHandle, log_dir: &Path) -> Result<Option<Child>, String> {
-    if runtime_health_ok(Duration::from_millis(350)) {
-        append_log(log_dir, "runtime health check passed, reusing existing process");
+fn bootstrap_runtime(
+    app: &AppHandle,
+    log_dir: &Path,
+    runtime_host: &str,
+    runtime_port: u16,
+    runtime_token: &str,
+) -> Result<Option<Child>, String> {
+    if runtime_health_ok(
+        runtime_host,
+        runtime_port,
+        runtime_token,
+        Duration::from_millis(350),
+    ) {
+        append_log(
+            log_dir,
+            "runtime health check passed, reusing existing process",
+        );
         return Ok(None);
     }
 
-    if runtime_port_open() {
+    if runtime_port_open(runtime_host, runtime_port) {
         append_log(
             log_dir,
             "runtime port is open but health check failed; waiting for existing process",
         );
         for _ in 0..24 {
             std::thread::sleep(Duration::from_millis(500));
-            if runtime_health_ok(Duration::from_millis(500)) {
+            if runtime_health_ok(
+                runtime_host,
+                runtime_port,
+                runtime_token,
+                Duration::from_millis(500),
+            ) {
                 append_log(log_dir, "existing runtime became healthy, reusing process");
                 return Ok(None);
             }
         }
-        return Err(
-            "runtime port 18519 is occupied but /local/v1/health is not responding".to_string(),
-        );
+        return Err(format!(
+            "runtime port {runtime_port} is occupied but /local/v1/health is not responding"
+        ));
     }
 
     let launch_plan = resolve_launch_plan(app)?;
@@ -136,8 +185,9 @@ fn bootstrap_runtime(app: &AppHandle, log_dir: &Path) -> Result<Option<Child>, S
         .current_dir(&launch_plan.current_dir)
         .env("OPCTRL_APP_ROOT", &launch_plan.app_root)
         .env("OPCTRL_BASE_DIR", app_local_runtime_dir(app))
-        .env("OPCTRL_HOST", RUNTIME_HOST)
-        .env("OPCTRL_PORT", RUNTIME_PORT.to_string())
+        .env("OPCTRL_HOST", runtime_host)
+        .env("OPCTRL_PORT", runtime_port.to_string())
+        .env("OPCTRL_API_TOKEN", runtime_token)
         .env("PYTHONUNBUFFERED", "1")
         .stdout(Stdio::from(stdout_log))
         .stderr(Stdio::from(stderr_log))
@@ -164,7 +214,9 @@ fn resolve_launch_plan(app: &AppHandle) -> Result<RuntimeLaunchPlan, String> {
         .map_err(|error| format!("failed to resolve workspace root: {error}"))?;
     let runtime_binary_name = runtime_binary_name();
 
-    let packaged_runtime_dir = resource_dir.join("runtime-dist").join("opcontroller-runtime");
+    let packaged_runtime_dir = resource_dir
+        .join("runtime-dist")
+        .join("opcontroller-runtime");
     let packaged_runtime_binary = packaged_runtime_dir.join(&runtime_binary_name);
     if packaged_runtime_binary.exists() {
         return Ok(RuntimeLaunchPlan {
@@ -176,7 +228,10 @@ fn resolve_launch_plan(app: &AppHandle) -> Result<RuntimeLaunchPlan, String> {
         });
     }
 
-    let dev_runtime_dir = workspace_root.join("runtime").join("dist").join("opcontroller-runtime");
+    let dev_runtime_dir = workspace_root
+        .join("runtime")
+        .join("dist")
+        .join("opcontroller-runtime");
     let dev_runtime_binary = dev_runtime_dir.join(&runtime_binary_name);
     if dev_runtime_binary.exists() {
         return Ok(RuntimeLaunchPlan {
@@ -188,7 +243,11 @@ fn resolve_launch_plan(app: &AppHandle) -> Result<RuntimeLaunchPlan, String> {
         });
     }
 
-    let dev_python = workspace_root.join("runtime").join(".venv").join("bin").join("python");
+    let dev_python = workspace_root
+        .join("runtime")
+        .join(".venv")
+        .join("bin")
+        .join("python");
     if dev_python.exists() {
         return Ok(RuntimeLaunchPlan {
             program: dev_python,
@@ -216,15 +275,59 @@ fn app_local_runtime_dir(app: &AppHandle) -> PathBuf {
         .join("runtime")
 }
 
-fn runtime_port_open() -> bool {
-    let address: SocketAddr = format!("{RUNTIME_HOST}:{RUNTIME_PORT}")
+fn configured_runtime_host() -> String {
+    std::env::var("OPCTRL_HOST").unwrap_or_else(|_| DEFAULT_RUNTIME_HOST.to_string())
+}
+
+fn configured_runtime_port() -> u16 {
+    std::env::var("OPCTRL_PORT")
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+        .unwrap_or(DEFAULT_RUNTIME_PORT)
+}
+
+fn resolve_runtime_token(app: &AppHandle, log_dir: &Path) -> String {
+    let token_path = app_local_runtime_dir(app).join(TOKEN_FILE_NAME);
+    if let Ok(raw) = fs::read_to_string(&token_path) {
+        let token = raw.trim();
+        if !token.is_empty() {
+            return token.to_string();
+        }
+    }
+
+    let token = generate_runtime_token();
+    if let Some(parent) = token_path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    if let Err(error) = fs::write(&token_path, &token) {
+        append_log(
+            log_dir,
+            &format!("failed to persist runtime token, using an ephemeral token: {error}"),
+        );
+    }
+    token
+}
+
+fn generate_runtime_token() -> String {
+    let mut bytes = [0_u8; TOKEN_BYTES];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn runtime_port_open(runtime_host: &str, runtime_port: u16) -> bool {
+    let address: SocketAddr = format!("{runtime_host}:{runtime_port}")
         .parse()
         .expect("runtime host and port should always parse");
     TcpStream::connect_timeout(&address, Duration::from_millis(350)).is_ok()
 }
 
-fn runtime_health_ok(timeout: Duration) -> bool {
-    let address: SocketAddr = format!("{RUNTIME_HOST}:{RUNTIME_PORT}")
+fn runtime_health_ok(
+    runtime_host: &str,
+    runtime_port: u16,
+    runtime_token: &str,
+    timeout: Duration,
+) -> bool {
+    let address: SocketAddr = format!("{runtime_host}:{runtime_port}")
         .parse()
         .expect("runtime host and port should always parse");
     let Ok(mut stream) = TcpStream::connect_timeout(&address, timeout) else {
@@ -233,7 +336,7 @@ fn runtime_health_ok(timeout: Duration) -> bool {
     let _ = stream.set_read_timeout(Some(timeout));
     let _ = stream.set_write_timeout(Some(timeout));
     let request = format!(
-        "GET /local/v1/health HTTP/1.1\r\nHost: {RUNTIME_HOST}:{RUNTIME_PORT}\r\nConnection: close\r\n\r\n"
+        "GET /local/v1/health HTTP/1.1\r\nHost: {runtime_host}:{runtime_port}\r\nX-OpController-Token: {runtime_token}\r\nConnection: close\r\n\r\n"
     );
     if stream.write_all(request.as_bytes()).is_err() {
         return false;

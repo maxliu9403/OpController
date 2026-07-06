@@ -1,5 +1,5 @@
 import { Button, Card, Col, Empty, Input, Row, Space, Spin, Table, Tag, Typography } from "antd";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { api } from "../api/client";
 import { MetricCard } from "../components/MetricCard";
 import { SectionCard } from "../components/SectionCard";
@@ -8,10 +8,11 @@ import { usePolling } from "../hooks/usePolling";
 export function ResultsPage() {
   const batches = usePolling(api.listBatches, 7000);
   const [selectedBatchId, setSelectedBatchId] = useState<string | null>(null);
-  const batchDetail = usePolling(
+  const batchDetailFetcher = useCallback(
     () => (selectedBatchId ? api.getResultBatch(selectedBatchId) : Promise.resolve(null)),
-    7000,
+    [selectedBatchId],
   );
+  const batchDetail = usePolling(batchDetailFetcher, 7000);
 
   const selectedBatch = useMemo(
     () => batches.data?.find((item) => item.id === selectedBatchId) ?? batches.data?.[0] ?? null,
@@ -106,4 +107,3 @@ export function ResultsPage() {
     </Space>
   );
 }
-

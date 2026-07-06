@@ -11,8 +11,7 @@ export function MonitorPage() {
   const [events, setEvents] = useState<MonitorEvent[]>([]);
 
   useEffect(() => {
-    const wsUrl = api.baseUrl.replace("http://", "ws://").replace("https://", "wss://") + "/monitor/stream";
-    const socket = new WebSocket(wsUrl);
+    const socket = new WebSocket(api.monitorStreamUrl());
     socket.onmessage = (event) => {
       const parsed = JSON.parse(event.data) as MonitorEvent;
       setEvents((current) => [parsed, ...current].slice(0, 40));
@@ -46,4 +45,3 @@ export function MonitorPage() {
     </Space>
   );
 }
-

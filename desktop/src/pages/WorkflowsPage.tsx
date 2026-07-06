@@ -22,13 +22,13 @@ import type {
   WorkflowRecord,
 } from "../types";
 
-function buildDefaultWorkflow(name = "新建运营流程") {
+function buildDefaultWorkflow(name = "新建运营流程", providerType = "ixbrowser") {
   return `metadata:
   name: ${JSON.stringify(name)}
   description: 向导生成的基础模板
   version: "1.0.0"
 profile_policy:
-  provider_type: ixbrowser
+  provider_type: ${providerType}
   selection_mode: explicit_profiles
   profile_ids: []
 runtime_policy:
@@ -328,7 +328,7 @@ export function WorkflowsPage() {
   const [selectedCard, setSelectedCard] = useState<WorkflowActionCard | null>(null);
   const [editingStepIndex, setEditingStepIndex] = useState<number | null>(null);
   const [insertAfterStepIndex, setInsertAfterStepIndex] = useState<number | null>(null);
-  const [selectedProviderType, setSelectedProviderType] = useState("ixbrowser");
+  const [selectedProviderType, setSelectedProviderType] = useState("");
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null);
   const [profileReloadKey, setProfileReloadKey] = useState(0);
@@ -349,12 +349,15 @@ export function WorkflowsPage() {
   );
   const foldersFetcher = useCallback(() => api.listWorkflowFolders(), [folderReloadKey]);
   const profilesFetcher = useCallback(
-    () => api.listProfiles(selectedProviderType, { managed_only: true }),
+    () => (selectedProviderType ? api.listProfiles(selectedProviderType, { managed_only: true }) : Promise.resolve([])),
     [selectedProviderType, profileReloadKey],
   );
-  const groupsFetcher = useCallback(() => api.listProviderGroups(selectedProviderType), [selectedProviderType, groupReloadKey]);
+  const groupsFetcher = useCallback(
+    () => (selectedProviderType ? api.listProviderGroups(selectedProviderType) : Promise.resolve([])),
+    [selectedProviderType, groupReloadKey],
+  );
   const sessionsFetcher = useCallback(
-    () => api.listProviderSessions(selectedProviderType),
+    () => (selectedProviderType ? api.listProviderSessions(selectedProviderType) : Promise.resolve([])),
     [selectedProviderType, sessionReloadKey],
   );
   const workflows = usePolling(workflowsFetcher, 12000);
@@ -362,6 +365,12 @@ export function WorkflowsPage() {
   const profiles = usePolling(profilesFetcher, 10000);
   const groups = usePolling(groupsFetcher, 10000);
   const openedSessions = usePolling(sessionsFetcher, 6000);
+
+  useEffect(() => {
+    if (!selectedProviderType && providers.data?.length) {
+      setSelectedProviderType(providers.data[0].provider_type);
+    }
+  }, [providers.data, selectedProviderType]);
 
   useEffect(() => {
     if (!activeWorkflow && !creatingWorkflow && workflows.data?.length) {
@@ -444,8 +453,7 @@ export function WorkflowsPage() {
   );
   const providerOptions = useMemo(
     () =>
-      (providers.data?.length ? providers.data : [{ provider_type: "ixbrowser", display_name: "ixBrowser" }])
-        .map((item) => ({ value: item.provider_type, label: item.display_name })),
+      (providers.data ?? []).map((item) => ({ value: item.provider_type, label: item.display_name })),
     [providers.data],
   );
   const groupOptions = useMemo(
@@ -591,7 +599,7 @@ export function WorkflowsPage() {
     setActiveWorkflow(null);
     setCreatingWorkflow(true);
     setActiveFolder(folder);
-    setYamlValue(buildDefaultWorkflow(name));
+    setYamlValue(buildDefaultWorkflow(name, selectedProviderType || providers.data?.[0]?.provider_type || "ixbrowser"));
     setSelectedCard(null);
     setEditingStepIndex(null);
     setInsertAfterStepIndex(null);

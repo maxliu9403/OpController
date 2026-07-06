@@ -29,6 +29,8 @@ class ScheduleService:
         self.batch_service = batch_service
         self.monitor = monitor
         self.scheduler = AsyncIOScheduler()
+        self._running_schedule_ids: set[str] = set()
+        self._active_schedule_batches: dict[str, str] = {}
 
     def start(self) -> None:
         if not self.scheduler.running:
@@ -118,22 +120,48 @@ class ScheduleService:
         return CronTrigger.from_crontab(expr, timezone=timezone)
 
     async def _fire_schedule(self, schedule_id: str) -> None:
-        async with self.session_factory() as session:
-            schedule = await session.get(ScheduleRecord, schedule_id)
-            if not schedule or schedule.status != ScheduleStatus.ENABLED:
-                return
-            batch = await self._create_batch_from_schedule(session, schedule)
-            start_request = StartBatchRequest(
-                workflow_id=schedule.workflow_id,
-                provider_type=schedule.provider_type,
-                profile_policy_snapshot=schedule.profile_policy_snapshot,
-                runtime_mode="visual",
-                requested_slots=schedule.max_concurrency,
+        if schedule_id in self._running_schedule_ids:
+            await self.monitor.publish(
+                "schedule.skipped",
+                {"schedule_id": schedule_id, "reason": "previous_run_still_active"},
             )
-            await self.batch_service.start_batch(session, batch.id, start_request)
-            schedule.last_run_at = datetime.utcnow()
-            await session.commit()
-            await self.monitor.publish("schedule.triggered", {"schedule_id": schedule.id, "batch_id": batch.id})
+            return
+
+        self._running_schedule_ids.add(schedule_id)
+        try:
+            async with self.session_factory() as session:
+                schedule = await session.get(ScheduleRecord, schedule_id)
+                if not schedule or schedule.status != ScheduleStatus.ENABLED:
+                    return
+                active_batch_id = self._active_schedule_batches.get(schedule_id)
+                if active_batch_id:
+                    active_batch = await session.get(BatchRecord, active_batch_id)
+                    if active_batch and active_batch.status in {BatchStatus.READY, BatchStatus.RUNNING, BatchStatus.PAUSED}:
+                        await self.monitor.publish(
+                            "schedule.skipped",
+                            {
+                                "schedule_id": schedule_id,
+                                "batch_id": active_batch_id,
+                                "reason": "previous_batch_still_active",
+                            },
+                        )
+                        return
+                    self._active_schedule_batches.pop(schedule_id, None)
+                batch = await self._create_batch_from_schedule(session, schedule)
+                start_request = StartBatchRequest(
+                    workflow_id=schedule.workflow_id,
+                    provider_type=schedule.provider_type,
+                    profile_policy_snapshot=schedule.profile_policy_snapshot,
+                    runtime_mode="visual",
+                    requested_slots=schedule.max_concurrency,
+                )
+                await self.batch_service.start_batch(session, batch.id, start_request)
+                self._active_schedule_batches[schedule.id] = batch.id
+                schedule.last_run_at = datetime.utcnow()
+                await session.commit()
+                await self.monitor.publish("schedule.triggered", {"schedule_id": schedule.id, "batch_id": batch.id})
+        finally:
+            self._running_schedule_ids.discard(schedule_id)
 
     async def _create_batch_from_schedule(
         self,

@@ -238,18 +238,18 @@ class IxBrowserProvider(BrowserProvider):
 
     async def arrange_windows(self, layout: dict[str, Any]) -> None:
         payload = {
-            "screen": 0,
+            "screen": settings.window_layout_screen_index,
             "layout": 1,
             "adaptive": 1,
-            "starting_position_x": 10,
-            "starting_position_y": 10,
-            "profile_size_width": 500,
-            "profile_size_hight": 500,
-            "profile_spacing_horizontal": 10,
-            "profile_spacing_vertical": 10,
-            "profile_deviaton_x": 50,
-            "profile_deviaton_y": 50,
-            "per_line_number_of_profiles": 3,
+            "starting_position_x": settings.window_layout_margin_px,
+            "starting_position_y": settings.window_layout_margin_px,
+            "profile_size_width": settings.window_layout_default_width,
+            "profile_size_hight": settings.window_layout_default_height,
+            "profile_spacing_horizontal": settings.window_layout_margin_px,
+            "profile_spacing_vertical": settings.window_layout_margin_px,
+            "profile_deviaton_x": settings.window_layout_provider_deviation_px,
+            "profile_deviaton_y": settings.window_layout_provider_deviation_px,
+            "per_line_number_of_profiles": max(1, settings.default_slot_limit // 2),
         }
         for key in payload:
             if key in layout and layout[key] is not None:

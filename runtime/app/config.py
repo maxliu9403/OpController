@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     app_name: str = "OpController Runtime"
     host: str = "127.0.0.1"
     port: int = 18519
+    api_token: str | None = None
     timezone: str = "Asia/Shanghai"
     base_dir: Path = Field(default_factory=lambda: Path.home() / ".opcontroller")
     data_dir_name: str = "data"
@@ -30,6 +31,15 @@ class Settings(BaseSettings):
     provider_close_timeout_sec: float = 15.0
     browser_attach_timeout_sec: float = 25.0
     window_layout_timeout_sec: float = 6.0
+    window_layout_screen_index: int = 0
+    window_layout_margin_px: int = 10
+    window_layout_top_offset_px: int = 30
+    window_layout_bottom_reserved_px: int = 40
+    window_layout_min_width: int = 320
+    window_layout_min_height: int = 360
+    window_layout_default_width: int = 500
+    window_layout_default_height: int = 500
+    window_layout_provider_deviation_px: int = 50
 
     @property
     def data_dir(self) -> Path:

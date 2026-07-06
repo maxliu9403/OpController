@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import secrets
 from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.db import get_session
 from app.runtime_context import RuntimeContext
 from app.schemas.batch import StartBatchRequest
@@ -16,6 +19,8 @@ from app.schemas.provider import ProviderScope
 from app.schemas.schedule import ScheduleDefinition
 
 router = APIRouter(prefix="/local/v1")
+AUTH_EXEMPT_PATHS = {"/local/v1/health"}
+TOKEN_HEADER = "x-opcontroller-token"
 
 
 def get_runtime(request: Request) -> RuntimeContext:
@@ -23,6 +28,32 @@ def get_runtime(request: Request) -> RuntimeContext:
 
 
 DbSession = Annotated[AsyncSession, Depends(get_session)]
+
+
+def _token_matches(provided: str | None) -> bool:
+    if not settings.api_token:
+        return True
+    if not provided:
+        return False
+    return secrets.compare_digest(provided, settings.api_token)
+
+
+async def local_api_auth_middleware(request: Request, call_next: Callable):
+    if (
+        request.method == "OPTIONS"
+        or not settings.api_token
+        or not request.url.path.startswith("/local/v1")
+        or request.url.path in AUTH_EXEMPT_PATHS
+    ):
+        return await call_next(request)
+
+    provided = request.headers.get(TOKEN_HEADER) or request.query_params.get("token")
+    if not _token_matches(provided):
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Invalid OpController local API token"},
+        )
+    return await call_next(request)
 
 
 @router.get("/health")
@@ -456,7 +487,7 @@ async def import_batch(
     session: DbSession,
     runtime: Annotated[RuntimeContext, Depends(get_runtime)],
     file: UploadFile = File(...),
-    provider_type: str = Form("ixbrowser"),
+    provider_type: str = Form(settings.provider_default_type),
 ):
     content = await file.read()
     return await runtime.batch_service.import_batch(
@@ -568,6 +599,9 @@ async def batch_results(
 
 @router.websocket("/monitor/stream")
 async def monitor_stream(websocket: WebSocket):
+    if not _token_matches(websocket.query_params.get("token")):
+        await websocket.close(code=1008)
+        return
     await websocket.accept()
     runtime: RuntimeContext = websocket.app.state.runtime
     async for event in runtime.monitor.subscribe():
@@ -576,9 +610,11 @@ async def monitor_stream(websocket: WebSocket):
 
 def create_app(repo_root: Path, lifespan: Callable | None = None) -> FastAPI:
     app = FastAPI(title="OpController Runtime", lifespan=lifespan)
+    app.middleware("http")(local_api_auth_middleware)
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=[],
+        allow_origin_regex=r"^(tauri://localhost|https?://tauri\.localhost|https?://(localhost|127\.0\.0\.1)(:\d+)?)$",
         allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],

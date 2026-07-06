@@ -18,8 +18,36 @@ import type {
   WorkflowRecord,
 } from "../types";
 
-const RUNTIME_ORIGIN = import.meta.env.VITE_RUNTIME_ORIGIN ?? "http://127.0.0.1:18519";
-const BASE = `${RUNTIME_ORIGIN}/local/v1`;
+type RuntimeClientConfig = {
+  origin: string;
+  token: string;
+};
+
+let runtimeOrigin = import.meta.env.VITE_RUNTIME_ORIGIN ?? "http://127.0.0.1:18519";
+let runtimeToken = import.meta.env.VITE_RUNTIME_TOKEN ?? "";
+
+function runtimeBaseUrl() {
+  return `${runtimeOrigin}/local/v1`;
+}
+
+export function configureRuntimeClient(config: Partial<RuntimeClientConfig>) {
+  if (config.origin) {
+    runtimeOrigin = config.origin.replace(/\/$/, "");
+  }
+  if (config.token !== undefined) {
+    runtimeToken = config.token;
+  }
+}
+
+export async function initializeRuntimeClient() {
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const config = await invoke<RuntimeClientConfig>("runtime_config");
+    configureRuntimeClient(config);
+  } catch {
+    // Running under plain Vite/browser dev is still supported through VITE_* fallback values.
+  }
+}
 
 function normalizeNetworkError(cause: unknown) {
   if (cause instanceof Error && /load failed|failed to fetch/i.test(cause.message)) {
@@ -65,12 +93,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const attempts = method === "GET" || method === "HEAD" ? 6 : 3;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
-      response = await fetch(`${BASE}${path}`, {
+      response = await fetch(`${runtimeBaseUrl()}${path}`, {
+        ...init,
         headers: {
           ...(shouldSendJsonHeader ? { "Content-Type": "application/json" } : {}),
+          ...(runtimeToken ? { "X-OpController-Token": runtimeToken } : {}),
           ...init?.headers,
         },
-        ...init,
       });
       if (!response.ok) {
         throw new Error(await response.text());
@@ -87,7 +116,19 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  baseUrl: BASE,
+  get baseUrl() {
+    return runtimeBaseUrl();
+  },
+  get token() {
+    return runtimeToken;
+  },
+  monitorStreamUrl: () => {
+    const url = new URL(`${runtimeBaseUrl()}/monitor/stream`);
+    if (runtimeToken) {
+      url.searchParams.set("token", runtimeToken);
+    }
+    return url.toString().replace("http://", "ws://").replace("https://", "wss://");
+  },
   health: () => request<{ status: string }>("/health"),
   systemCheck: () => request<SystemCheckResult>("/system/check"),
   listProviders: () => request<ProviderInfo[]>("/providers"),

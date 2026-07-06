@@ -1,8 +1,8 @@
 import { Button, Result, Space, Spin, Typography } from "antd";
 import { PropsWithChildren, useEffect, useState } from "react";
-import { api } from "../api/client";
+import { api, initializeRuntimeClient } from "../api/client";
 
-const STARTUP_TIMEOUT_MS = 20000;
+const STARTUP_TIMEOUT_MS = 90000;
 const RETRY_INTERVAL_MS = 1200;
 
 function describeBootstrapError(cause: unknown) {
@@ -26,6 +26,7 @@ export function RuntimeBootstrap({ children }: PropsWithChildren) {
     const probe = async () => {
       setAttempts((value) => value + 1);
       try {
+        await initializeRuntimeClient();
         await api.health();
         if (!cancelled) {
           setReady(true);
