@@ -1,6 +1,6 @@
 import Editor from "@monaco-editor/react";
 import { Alert, Button, Col, Drawer, Empty, Input, Modal, Popconfirm, Row, Select, Space, Spin, Steps, Table, Tabs, Tag, Typography, message } from "antd";
-import { Check, Copy, Download, FilePlus2, FolderPlus, Pencil, Trash2, Upload, X } from "lucide-react";
+import { Check, Copy, Download, FilePlus2, FolderPlus, Link2, Pencil, Trash2, Upload, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import YAML from "yaml";
 import { api } from "../api/client";
@@ -12,8 +12,12 @@ import {
 } from "../components/WorkflowStepComposer";
 import { type WorkflowDraftStep, WorkflowWizard } from "../components/WorkflowWizard";
 import { usePolling } from "../hooks/usePolling";
+import { statusLabel } from "../utils/status";
 import type {
   LocatorPickResult,
+  ProfileRecord,
+  ProviderGroupRecord,
+  ProviderScope,
   StepLivePreviewResult,
   WorkflowActionCard,
   WorkflowDryRunStepResult,
@@ -161,6 +165,64 @@ function profileGroupId(profile: { group_summary?: { id?: string | number | null
   return raw === null || raw === undefined || raw === "" ? "__ungrouped__" : String(raw);
 }
 
+function normalizeProviderScope(scope: ProviderScope | null | undefined, providerType: string): ProviderScope {
+  return scope ?? {
+    provider_type: providerType,
+    managed_group_ids: [],
+    include_profile_ids: [],
+    exclude_profile_ids: [],
+    is_configured: false,
+  };
+}
+
+function filterManagedGroups(
+  groups: ProviderGroupRecord[] | null | undefined,
+  scope: ProviderScope | null | undefined,
+  providerType: string,
+) {
+  const normalized = normalizeProviderScope(scope, providerType);
+  const source = groups ?? [];
+  if (!normalized.is_configured) {
+    return source;
+  }
+  const managed = new Set(normalized.managed_group_ids.map(String));
+  return source.filter((group) => managed.has(String(group.external_group_id)));
+}
+
+function workflowPolicyFromRecord(workflow: WorkflowRecord) {
+  const normalizedPolicy = workflow.normalized_workflow_json?.profile_policy;
+  if (normalizedPolicy && typeof normalizedPolicy === "object") {
+    return normalizedPolicy as Record<string, unknown>;
+  }
+  try {
+    const parsed = YAML.parse(workflow.workflow_yaml) as WorkflowDraftDocument;
+    return parsed.profile_policy ?? {};
+  } catch {
+    return {};
+  }
+}
+
+function workflowRunGroupIds(workflow: WorkflowRecord) {
+  const policy = workflowPolicyFromRecord(workflow);
+  return Array.isArray(policy.group_ids) ? policy.group_ids.map(String).filter(Boolean) : [];
+}
+
+function countProfilesInGroups(profiles: ProfileRecord[] | null | undefined, groupIds: string[]) {
+  const groupSet = new Set(groupIds.map(String));
+  return (profiles ?? []).filter((profile) => groupSet.has(profileGroupId(profile))).length;
+}
+
+function groupSummaryLabel(groups: ProviderGroupRecord[], groupIds: string[]) {
+  if (!groupIds.length) {
+    return "未关联";
+  }
+  const nameById = new Map(groups.map((group) => [String(group.external_group_id), group.display_name]));
+  return groupIds
+    .slice(0, 3)
+    .map((id) => nameById.get(id) ?? id)
+    .join("、") + (groupIds.length > 3 ? ` 等 ${groupIds.length} 组` : "");
+}
+
 function defaultTagForType(type: string) {
   if (type === "fill") {
     return "input";
@@ -211,20 +273,19 @@ function nextOrdinal(steps: WorkflowDraftStep[], locators: Record<string, unknow
 function applySelectedProfilePolicy(
   parsed: WorkflowDraftDocument,
   providerType: string,
-  groupId: string | null,
-  profileId: string | null,
+  groupIds: string[],
 ) {
   parsed.profile_policy = parsed.profile_policy ?? {};
   parsed.profile_policy.provider_type = providerType;
-  if (groupId) {
+  if (groupIds.length) {
     parsed.profile_policy.selection_mode = "by_group";
-    parsed.profile_policy.group_ids = [groupId];
-    parsed.profile_policy.profile_ids = profileId ? [profileId] : [];
+    parsed.profile_policy.group_ids = groupIds;
+    parsed.profile_policy.profile_ids = [];
     return;
   }
-  parsed.profile_policy.selection_mode = profileId ? "explicit_profiles" : "all_profiles";
+  parsed.profile_policy.selection_mode = "explicit_profiles";
   parsed.profile_policy.group_ids = [];
-  parsed.profile_policy.profile_ids = profileId ? [profileId] : [];
+  parsed.profile_policy.profile_ids = [];
 }
 
 function locatorToInitialPreview(locator: Record<string, unknown> | null | undefined): LocatorPreview | null {
@@ -401,12 +462,17 @@ export function WorkflowsPage() {
   const [selectedProviderType, setSelectedProviderType] = useState("");
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null);
+  const [runGroupIds, setRunGroupIds] = useState<string[]>([]);
   const [profileReloadKey, setProfileReloadKey] = useState(0);
   const [groupReloadKey, setGroupReloadKey] = useState(0);
   const [sessionReloadKey, setSessionReloadKey] = useState(0);
   const [sessionActionLoading, setSessionActionLoading] = useState(false);
   const [dryRunLoading, setDryRunLoading] = useState(false);
   const [dryRunResult, setDryRunResult] = useState<WorkflowDryRunResult | null>(null);
+  const [profileGroupModalWorkflow, setProfileGroupModalWorkflow] = useState<WorkflowRecord | null>(null);
+  const [profileGroupDraftIds, setProfileGroupDraftIds] = useState<string[]>([]);
+  const [profileGroupSaving, setProfileGroupSaving] = useState(false);
+  const [profileGroupModalReloadKey, setProfileGroupModalReloadKey] = useState(0);
   const importInputRef = useRef<HTMLInputElement | null>(null);
 
   const workflowsFetcher = useCallback(
@@ -427,15 +493,39 @@ export function WorkflowsPage() {
     () => (selectedProviderType ? api.listProviderGroups(selectedProviderType) : Promise.resolve([])),
     [selectedProviderType, groupReloadKey],
   );
+  const providerScopeFetcher = useCallback(
+    () => (selectedProviderType ? api.getProviderScope(selectedProviderType) : Promise.resolve(null)),
+    [selectedProviderType, groupReloadKey],
+  );
   const sessionsFetcher = useCallback(
     () => (selectedProviderType ? api.listProviderSessions(selectedProviderType) : Promise.resolve([])),
     [selectedProviderType, sessionReloadKey],
+  );
+  const profileGroupModalProviderType = profileGroupModalWorkflow?.target_provider_type ?? "";
+  const profileGroupModalGroupsFetcher = useCallback(
+    () => (profileGroupModalProviderType ? api.listProviderGroups(profileGroupModalProviderType) : Promise.resolve([])),
+    [profileGroupModalProviderType, profileGroupModalReloadKey],
+  );
+  const profileGroupModalProfilesFetcher = useCallback(
+    () =>
+      profileGroupModalProviderType
+        ? api.listProfiles(profileGroupModalProviderType, { managed_only: true })
+        : Promise.resolve([]),
+    [profileGroupModalProviderType, profileGroupModalReloadKey],
+  );
+  const profileGroupModalScopeFetcher = useCallback(
+    () => (profileGroupModalProviderType ? api.getProviderScope(profileGroupModalProviderType) : Promise.resolve(null)),
+    [profileGroupModalProviderType, profileGroupModalReloadKey],
   );
   const workflows = usePolling(workflowsFetcher, 12000);
   const folders = usePolling(foldersFetcher, 12000);
   const profiles = usePolling(profilesFetcher, 10000);
   const groups = usePolling(groupsFetcher, 10000);
+  const providerScope = usePolling(providerScopeFetcher, 10000);
   const openedSessions = usePolling(sessionsFetcher, 6000);
+  const profileGroupModalGroups = usePolling(profileGroupModalGroupsFetcher, 10000);
+  const profileGroupModalProfiles = usePolling(profileGroupModalProfilesFetcher, 10000);
+  const profileGroupModalScope = usePolling(profileGroupModalScopeFetcher, 10000);
 
   useEffect(() => {
     if (!selectedProviderType && providers.data?.length) {
@@ -467,9 +557,11 @@ export function WorkflowsPage() {
         const policy = parsed.profile_policy ?? {};
         const groupIds = Array.isArray(policy.group_ids) ? policy.group_ids : [];
         const profileIds = Array.isArray(policy.profile_ids) ? policy.profile_ids : [];
+        setRunGroupIds(groupIds.map(String));
         setSelectedGroupId(groupIds[0] === undefined ? null : String(groupIds[0]));
         setSelectedProfileId(profileIds[0] === undefined ? null : String(profileIds[0]));
       } catch {
+        setRunGroupIds([]);
         setSelectedGroupId(null);
         setSelectedProfileId(null);
       }
@@ -509,6 +601,15 @@ export function WorkflowsPage() {
 
   const draftSteps = workflowDraft?.steps ?? [];
   const draftLocators = workflowDraft?.locators ?? {};
+  const providerOptions = useMemo(
+    () =>
+      (providers.data ?? []).map((item) => ({ value: item.provider_type, label: item.display_name })),
+    [providers.data],
+  );
+  const managedGroups = useMemo(
+    () => filterManagedGroups(groups.data, providerScope.data, selectedProviderType),
+    [groups.data, providerScope.data, selectedProviderType],
+  );
   const filteredProfiles = useMemo(
     () =>
       (profiles.data ?? []).filter((profile) => {
@@ -529,23 +630,98 @@ export function WorkflowsPage() {
     [filteredProfiles, selectedProfileId],
   );
   const selectedGroup = useMemo(
-    () => (groups.data ?? []).find((item) => item.external_group_id === selectedGroupId) ?? null,
-    [groups.data, selectedGroupId],
+    () => managedGroups.find((item) => item.external_group_id === selectedGroupId) ?? null,
+    [managedGroups, selectedGroupId],
   );
-  const providerOptions = useMemo(
+  const runProfileCount = useMemo(
     () =>
-      (providers.data ?? []).map((item) => ({ value: item.provider_type, label: item.display_name })),
-    [providers.data],
+      (profiles.data ?? []).filter((profile) => runGroupIds.includes(profileGroupId(profile))).length,
+    [profiles.data, runGroupIds],
+  );
+  const workflowProfileBindingStatus = useCallback(
+    (workflow: WorkflowRecord) => {
+      const groupIds = workflowRunGroupIds(workflow);
+      if (!groupIds.length) {
+        return {
+          color: "red",
+          label: "未关联 Profile 组",
+          detail: "不可启动",
+          profileCount: 0,
+          usable: false,
+        };
+      }
+      if (workflow.target_provider_type !== selectedProviderType) {
+        return {
+          color: "blue",
+          label: `已关联 ${groupIds.length} 组`,
+          detail: "切换 Provider 后可查看数量",
+          profileCount: null,
+          usable: true,
+        };
+      }
+      const managedIds = new Set(managedGroups.map((group) => String(group.external_group_id)));
+      const outOfScope = groupIds.filter((groupId) => !managedIds.has(groupId));
+      if (outOfScope.length) {
+        return {
+          color: "red",
+          label: "Provider 未加白",
+          detail: outOfScope.slice(0, 3).join("、"),
+          profileCount: 0,
+          usable: false,
+        };
+      }
+      const profileCount = countProfilesInGroups(profiles.data, groupIds);
+      if (profileCount <= 0) {
+        return {
+          color: "red",
+          label: "未命中 Profile",
+          detail: "不可启动",
+          profileCount,
+          usable: false,
+        };
+      }
+      return {
+        color: "green",
+        label: `可启动 ${profileCount} Profiles`,
+        detail: groupSummaryLabel(managedGroups, groupIds),
+        profileCount,
+        usable: true,
+      };
+    },
+    [managedGroups, profiles.data, selectedProviderType],
   );
   const groupOptions = useMemo(
     () => [
-      { value: "__all__", label: "全部分组" },
-      ...(groups.data ?? []).map((group) => ({
+      { value: "__all__", label: "全部已管理分组" },
+      ...managedGroups.map((group) => ({
         value: group.external_group_id,
         label: `${group.display_name}${group.profile_count === null || group.profile_count === undefined ? "" : ` (${group.profile_count})`}`,
       })),
     ],
-    [groups.data],
+    [managedGroups],
+  );
+  const modalManagedGroups = useMemo(
+    () => filterManagedGroups(profileGroupModalGroups.data, profileGroupModalScope.data, profileGroupModalProviderType),
+    [profileGroupModalGroups.data, profileGroupModalProviderType, profileGroupModalScope.data],
+  );
+  const modalGroupOptions = useMemo(() => {
+    const managedIds = new Set(modalManagedGroups.map((group) => String(group.external_group_id)));
+    const unavailableSelected = profileGroupDraftIds.filter((id) => id && !managedIds.has(String(id)));
+    return [
+      ...modalManagedGroups.map((group) => ({
+        value: group.external_group_id,
+        label: `${group.display_name}${group.profile_count === null || group.profile_count === undefined ? "" : ` (${group.profile_count})`}`,
+      })),
+      ...unavailableSelected.map((id) => ({
+        value: id,
+        label: `未在 Provider 管理范围内：${id}`,
+        disabled: true,
+      })),
+    ];
+  }, [modalManagedGroups, profileGroupDraftIds]);
+  const modalProfileCount = useMemo(
+    () => countProfilesInGroups(profileGroupModalProfiles.data, profileGroupDraftIds),
+    [profileGroupDraftIds, profileGroupModalProfiles.data],
   );
   const profileOptions = useMemo(
     () =>
@@ -565,6 +741,15 @@ export function WorkflowsPage() {
       setSelectedProfileId(filteredProfiles[0].external_profile_id);
     }
   }, [filteredProfiles, selectedProfileId]);
+
+  useEffect(() => {
+    if (!selectedGroupId) {
+      return;
+    }
+    if (!managedGroups.some((group) => String(group.external_group_id) === selectedGroupId)) {
+      setSelectedGroupId(null);
+    }
+  }, [managedGroups, selectedGroupId]);
 
   const openStepComposer = (card: WorkflowActionCard, options?: { insertAfterIndex?: number }) => {
     if (!workflowDraft) {
@@ -809,6 +994,7 @@ export function WorkflowsPage() {
       setActiveFolder(folder);
       setWorkflowFolderFilter(folder);
       setSelectedProviderType(newWorkflowProviderType);
+      setRunGroupIds([]);
       setYamlValue(buildDefaultWorkflow(name, newWorkflowProviderType));
       setSelectedCard(null);
       setEditingStepIndex(null);
@@ -904,6 +1090,42 @@ export function WorkflowsPage() {
     }
   };
 
+  const handleOpenProfileGroupModal = (workflow: WorkflowRecord) => {
+    setProfileGroupModalWorkflow(workflow);
+    setProfileGroupDraftIds(workflowRunGroupIds(workflow));
+    setProfileGroupModalReloadKey((value) => value + 1);
+  };
+
+  const handleSaveProfileGroups = async () => {
+    if (!profileGroupModalWorkflow) {
+      return;
+    }
+    try {
+      setProfileGroupSaving(true);
+      const parsed = (YAML.parse(profileGroupModalWorkflow.workflow_yaml) ?? {}) as WorkflowDraftDocument;
+      const cleanedGroupIds = Array.from(new Set(profileGroupDraftIds.map(String).filter(Boolean)));
+      applySelectedProfilePolicy(parsed, profileGroupModalWorkflow.target_provider_type, cleanedGroupIds);
+      const saved = await api.updateWorkflow(
+        profileGroupModalWorkflow.id,
+        YAML.stringify(parsed),
+        profileGroupModalWorkflow.folder,
+      );
+      if (activeWorkflow?.id === saved.id) {
+        setActiveWorkflow(saved);
+        setYamlValue(saved.workflow_yaml);
+        setRunGroupIds(workflowRunGroupIds(saved));
+      }
+      setWorkflowReloadKey((value) => value + 1);
+      setProfileGroupModalWorkflow(null);
+      setProfileGroupDraftIds([]);
+      message.success(cleanedGroupIds.length ? "运行 Profile 组已关联" : "已移除运行 Profile 组，流程将不可启动");
+    } catch (cause) {
+      message.error(cause instanceof Error ? cause.message : "关联 Profile 组失败");
+    } finally {
+      setProfileGroupSaving(false);
+    }
+  };
+
   const handleDeleteWorkflow = async (workflow: WorkflowRecord) => {
     try {
       await api.deleteWorkflow(workflow.id);
@@ -916,9 +1138,14 @@ export function WorkflowsPage() {
         setSelectedCard(null);
         setEditingStepIndex(null);
         setInsertAfterStepIndex(null);
+        setRunGroupIds([]);
       }
       if (renamingWorkflowId === workflow.id) {
         cancelRenameWorkflow();
+      }
+      if (profileGroupModalWorkflow?.id === workflow.id) {
+        setProfileGroupModalWorkflow(null);
+        setProfileGroupDraftIds([]);
       }
       message.success("流程已删除");
     } catch (cause) {
@@ -933,6 +1160,7 @@ export function WorkflowsPage() {
     setSelectedCard(null);
     setEditingStepIndex(null);
     setInsertAfterStepIndex(null);
+    setRunGroupIds([]);
     message.info("已取消当前未保存流程草稿");
   };
 
@@ -1076,7 +1304,7 @@ export function WorkflowsPage() {
     }
     try {
       const parsed = (YAML.parse(yamlValue) ?? {}) as WorkflowDraftDocument;
-      applySelectedProfilePolicy(parsed, selectedProviderType, selectedGroupId, selectedProfileId);
+      applySelectedProfilePolicy(parsed, selectedProviderType, runGroupIds);
       const workflowYaml = YAML.stringify(parsed);
       const saved = activeWorkflow
         ? await api.updateWorkflow(activeWorkflow.id, workflowYaml, activeFolder)
@@ -1206,7 +1434,7 @@ export function WorkflowsPage() {
     }
     try {
       const parsed = (YAML.parse(yamlValue) ?? {}) as WorkflowDraftDocument;
-      applySelectedProfilePolicy(parsed, selectedProviderType, selectedGroupId, selectedProfileId);
+      applySelectedProfilePolicy(parsed, selectedProviderType, runGroupIds);
       parsed.steps = parsed.steps ?? [];
       parsed.locators = parsed.locators ?? {};
       const editIndex = editingStepIndex;
@@ -1285,7 +1513,7 @@ export function WorkflowsPage() {
             {selectedSession ? "已连接测试窗口" : "选择窗口并打开"}
           </Typography.Title>
         </div>
-        <Tag color={selectedSession ? "green" : "default"}>{selectedSession ? "Ready" : "Idle"}</Tag>
+        <Tag color={selectedSession ? "green" : "default"}>{selectedSession ? "已就绪" : "未连接"}</Tag>
       </div>
       <Alert
         type={selectedSession ? "success" : "info"}
@@ -1310,6 +1538,7 @@ export function WorkflowsPage() {
             setSelectedProviderType(value);
             setSelectedGroupId(null);
             setSelectedProfileId(null);
+            setRunGroupIds([]);
             setGroupReloadKey((current) => current + 1);
             setProfileReloadKey((current) => current + 1);
             setSessionReloadKey((current) => current + 1);
@@ -1374,7 +1603,7 @@ export function WorkflowsPage() {
     </Space>
   );
 
-  if (providers.loading || workflows.loading || folders.loading || actionCards.loading || profiles.loading || groups.loading || openedSessions.loading) {
+  if (providers.loading || workflows.loading || folders.loading || actionCards.loading || profiles.loading || groups.loading || providerScope.loading || openedSessions.loading) {
     return <Spin size="large" />;
   }
 
@@ -1532,9 +1761,11 @@ export function WorkflowsPage() {
             </div>
             <div className="workflow-record-list">
               {(workflows.data ?? []).length ? (
-                (workflows.data ?? []).map((item) => (
+                (workflows.data ?? []).map((item) => {
+                  const bindingStatus = workflowProfileBindingStatus(item);
+                  return (
                   <div
-                    className={`workflow-record-card${activeWorkflow?.id === item.id ? " is-active" : ""}`}
+                    className={`workflow-record-card${activeWorkflow?.id === item.id ? " is-active" : ""}${bindingStatus.usable ? "" : " is-unusable"}`}
                     key={item.id}
                     onDoubleClick={() => handleSelectWorkflow(item)}
                   >
@@ -1594,17 +1825,21 @@ export function WorkflowsPage() {
                         <strong>{item.target_provider_type}</strong>
                       </div>
                       <div className="workflow-record-field">
-                        <span>版本</span>
-                        <strong>{item.version}</strong>
-                      </div>
-                      <div className="workflow-record-field">
-                        <span>类型</span>
-                        <Tag color={item.is_builtin ? "blue" : "gold"}>{item.is_builtin ? "内置" : "自定义"}</Tag>
+                        <span>Profile 组</span>
+                        <Space size={4} wrap>
+                          <Tag color={bindingStatus.color}>{bindingStatus.label}</Tag>
+                          <Typography.Text className="workflow-record-profile-detail" type="secondary">
+                            {bindingStatus.detail}
+                          </Typography.Text>
+                        </Space>
                       </div>
                     </div>
                     <Space className="workflow-record-actions" size={[6, 6]} wrap>
                       <Button size="small" type="primary" onClick={() => handleSelectWorkflow(item)}>
                         编排
+                      </Button>
+                      <Button size="small" icon={<Link2 size={14} />} onClick={() => handleOpenProfileGroupModal(item)}>
+                        关联 Profile 组
                       </Button>
                       <Button size="small" icon={<Download size={14} />} onClick={() => handleExportWorkflow(item)}>
                         导出
@@ -1626,7 +1861,8 @@ export function WorkflowsPage() {
                       </Popconfirm>
                     </Space>
                   </div>
-                ))
+                  );
+                })
               ) : (
                 <Empty description="当前筛选下没有流程" />
               )}
@@ -1679,6 +1915,9 @@ export function WorkflowsPage() {
                 </Tag>
                 <Tag color="blue">{activeFolder}</Tag>
                 <Tag color="cyan">{activeProviderLabel}</Tag>
+                <Tag color={runGroupIds.length ? "green" : "red"}>
+                  运行 Profile {runProfileCount}
+                </Tag>
                 <Tag color={selectedSession ? "green" : "default"}>
                   {selectedSession ? "测试窗口已连接" : "未连接测试窗口"}
                 </Tag>
@@ -1844,6 +2083,73 @@ export function WorkflowsPage() {
         </Space>
       </Modal>
 
+      <Modal
+        title="关联运行 Profile 组"
+        open={Boolean(profileGroupModalWorkflow)}
+        onCancel={() => {
+          if (profileGroupSaving) {
+            return;
+          }
+          setProfileGroupModalWorkflow(null);
+          setProfileGroupDraftIds([]);
+        }}
+        okText="保存关联"
+        cancelText="取消"
+        confirmLoading={profileGroupSaving}
+        onOk={() => void handleSaveProfileGroups()}
+      >
+        <Space direction="vertical" size={14} style={{ width: "100%" }}>
+          <Alert
+            type={profileGroupDraftIds.length ? "info" : "warning"}
+            showIcon
+            message={profileGroupDraftIds.length ? "这些 Profile 组会作为批次/定时的运行池" : "未关联 Profile 组时，流程无法启动批次或定时"}
+            description={
+              profileGroupModalWorkflow
+                ? `流程：${profileGroupModalWorkflow.name}；Provider：${profileGroupModalWorkflow.target_provider_type}`
+                : undefined
+            }
+          />
+          {profileGroupModalGroups.error || profileGroupModalScope.error ? (
+            <Alert
+              type="warning"
+              showIcon
+              message="Provider 管理范围读取失败"
+              description={profileGroupModalGroups.error ?? profileGroupModalScope.error}
+            />
+          ) : null}
+          <div className="workflow-field">
+            <Typography.Text type="secondary">只展示 Provider 管理范围内的 Profile 组</Typography.Text>
+            <Select
+              mode="multiple"
+              allowClear
+              showSearch
+              optionFilterProp="label"
+              style={{ width: "100%" }}
+              loading={profileGroupModalGroups.loading || profileGroupModalScope.loading}
+              disabled={profileGroupModalGroups.loading || profileGroupModalScope.loading}
+              value={profileGroupDraftIds}
+              options={modalGroupOptions}
+              placeholder="选择一个或多个已加白的指纹浏览器分组"
+              onChange={(values) => setProfileGroupDraftIds(values)}
+            />
+          </div>
+          <Space wrap>
+            <Tag color={profileGroupDraftIds.length ? "blue" : "red"}>
+              已选 {profileGroupDraftIds.length} 组
+            </Tag>
+            <Tag color={modalProfileCount > 0 ? "green" : "red"}>
+              命中 {modalProfileCount} Profiles
+            </Tag>
+            <Button
+              size="small"
+              onClick={() => setProfileGroupModalReloadKey((value) => value + 1)}
+            >
+              刷新分组
+            </Button>
+          </Space>
+        </Space>
+      </Modal>
+
       <Drawer
         title="整条流程试运行结果"
         width={860}
@@ -1923,7 +2229,7 @@ export function WorkflowsPage() {
                   title: "状态",
                   dataIndex: "status",
                   width: 110,
-                  render: (value: string) => <Tag color={statusColor(value)}>{value}</Tag>,
+                  render: (value: string) => <Tag color={statusColor(value)}>{statusLabel(value)}</Tag>,
                 },
                 { title: "动作", dataIndex: "action_type", width: 120 },
                 { title: "耗时", dataIndex: "elapsed_ms", width: 110, render: (value: number) => `${value}ms` },

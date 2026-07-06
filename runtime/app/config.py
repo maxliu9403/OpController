@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     artifact_dir_name: str = "artifacts"
     export_dir_name: str = "exports"
     cache_dir_name: str = "cache"
+    schedule_input_dir_name: str = "schedule_inputs"
     provider_default_type: str = "ixbrowser"
     ixbrowser_api_base: str = "http://127.0.0.1:53200"
     ixbrowser_api_timeout_sec: float = 10.0
@@ -64,6 +65,10 @@ class Settings(BaseSettings):
     @property
     def cache_dir(self) -> Path:
         return self.base_dir / self.cache_dir_name
+
+    @property
+    def schedule_input_dir(self) -> Path:
+        return self.data_dir / self.schedule_input_dir_name
 
 
 settings = Settings()

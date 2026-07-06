@@ -393,7 +393,7 @@ a {
 
 .workflow-record-card {
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) minmax(300px, 0.72fr) minmax(300px, max-content);
+  grid-template-columns: minmax(260px, 1.15fr) minmax(360px, 0.9fr) minmax(360px, max-content);
   gap: 14px;
   align-items: center;
   padding: 14px 16px;
@@ -410,6 +410,12 @@ a {
   border-color: var(--line-strong);
   box-shadow: 0 16px 44px rgba(120, 78, 20, 0.12);
   transform: translateY(-1px);
+}
+
+.workflow-record-card.is-unusable {
+  background:
+    linear-gradient(135deg, rgba(207, 63, 48, 0.06), transparent 48%),
+    var(--surface-2);
 }
 
 .workflow-record-main {
@@ -441,7 +447,7 @@ a {
 
 .workflow-record-meta {
   display: grid;
-  grid-template-columns: minmax(150px, 1.3fr) minmax(78px, 0.8fr) minmax(56px, 0.55fr) minmax(70px, 0.65fr);
+  grid-template-columns: minmax(150px, 1.2fr) minmax(80px, 0.6fr) minmax(150px, 1fr);
   gap: 8px;
   align-items: end;
   min-width: 0;
@@ -466,9 +472,16 @@ a {
   white-space: nowrap;
 }
 
+.workflow-record-profile-detail {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .workflow-record-actions {
   justify-content: flex-end;
-  min-width: 292px;
+  min-width: 344px;
 }
 
 @container (max-width: 980px) {
@@ -478,7 +491,7 @@ a {
   }
 
   .workflow-record-meta {
-    grid-template-columns: minmax(180px, 1fr) repeat(3, minmax(72px, max-content));
+    grid-template-columns: minmax(180px, 1fr) minmax(72px, max-content) minmax(180px, 1fr);
   }
 
   .workflow-record-actions {
@@ -489,7 +502,7 @@ a {
 
 @container (max-width: 640px) {
   .workflow-record-meta {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: 1fr;
   }
 }
 
@@ -809,6 +822,56 @@ a {
     linear-gradient(135deg, rgba(244, 163, 0, 0.08), var(--surface-1));
 }
 
+.results-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.results-workbench {
+  display: grid;
+  grid-template-columns: minmax(360px, 0.85fr) minmax(0, 1.35fr);
+  gap: 18px;
+  height: min(780px, calc(100vh - 260px));
+  min-height: 600px;
+}
+
+.results-filter-strip {
+  padding: 4px;
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface-2) 86%, transparent);
+}
+
+.results-workbench > .section-card {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.results-workbench > .section-card > .ant-card-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.results-panel-scroll {
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.result-row-active > td {
+  background: rgba(244, 163, 0, 0.12) !important;
+}
+
+.results-row-detail {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
 .monitor-event {
   align-items: flex-start;
   padding: 16px 20px;
@@ -898,5 +961,15 @@ a {
   .schedule-submit-bar {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .results-metric-grid,
+  .results-workbench,
+  .results-row-detail {
+    grid-template-columns: 1fr;
+  }
+
+  .results-workbench {
+    height: auto;
   }
 }

@@ -5,6 +5,8 @@ import {
   Form,
   Input,
   InputNumber,
+  Modal,
+  Popconfirm,
   Radio,
   Select,
   Space,
@@ -18,12 +20,14 @@ import {
 } from "antd";
 import type { UploadProps } from "antd";
 import dayjs, { type Dayjs } from "dayjs";
-import { Plus, Trash2, UploadCloud } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { Download, Pencil, Trash2, UploadCloud } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
 import { SectionCard } from "../components/SectionCard";
 import { usePolling } from "../hooks/usePolling";
-import type { ScheduleRecord } from "../types";
+import type { ProfileRecord, ProviderGroupRecord, ScheduleRecord, WorkflowRecord } from "../types";
+import type { InputProfileMappingValidation } from "../types";
+import { statusColor, statusLabel } from "../utils/status";
 
 type ScheduleInputRow = {
   id: string;
@@ -31,12 +35,7 @@ type ScheduleInputRow = {
 };
 
 const BEIJING_TIMEZONE = "Asia/Shanghai";
-const DEFAULT_INPUT_COLUMNS = ["keyword", "profile_id", "note"];
-const INPUT_COLUMN_LABELS: Record<string, string> = {
-  keyword: "关键词 keyword",
-  profile_id: "Profile ID 可选",
-  note: "备注",
-};
+const DEFAULT_INPUT_COLUMNS = ["profile_id", "keyword", "note"];
 
 const WEEKDAY_OPTIONS = [
   { label: "周一", value: "mon" },
@@ -62,13 +61,6 @@ function rowToPayload(row: ScheduleInputRow) {
       .map(([key, value]) => [key, normalizeCellValue(value)] as const)
       .filter(([, value]) => value !== ""),
   );
-}
-
-function createEmptyInputRow() {
-  return {
-    id: crypto.randomUUID(),
-    payload: Object.fromEntries(DEFAULT_INPUT_COLUMNS.map((key) => [key, key === "keyword" ? "Bags" : ""])),
-  };
 }
 
 function normalizeCellValue(value: unknown) {
@@ -131,16 +123,133 @@ function formatDateTime(value?: string | null) {
   return parsed.isValid() ? parsed.format("YYYY-MM-DD HH:mm") : value;
 }
 
+function parseTimeValue(value?: string | null) {
+  const [hour = "9", minute = "30"] = String(value || "09:30").split(":");
+  return dayjs().hour(Number(hour)).minute(Number(minute)).second(0).millisecond(0);
+}
+
+function scheduleInitialValues(record: ScheduleRecord) {
+  if (record.schedule_type === "once") {
+    const parsed = dayjs(record.schedule_expr);
+    return {
+      name: record.name,
+      enabled: record.status === "enabled",
+      schedule_type: "once",
+      once_date: parsed.isValid() ? parsed : dayjs().add(1, "day"),
+      schedule_time: parsed.isValid() ? parsed : defaultScheduleTime(),
+      weekly_days: ["mon"],
+      max_concurrency: record.max_concurrency,
+    };
+  }
+  if (record.schedule_type === "weekly") {
+    const [daysPart, timePart] = record.schedule_expr.split("|");
+    return {
+      name: record.name,
+      enabled: record.status === "enabled",
+      schedule_type: "weekly",
+      once_date: dayjs().add(1, "day"),
+      schedule_time: parseTimeValue(timePart),
+      weekly_days: daysPart ? daysPart.split(",").filter(Boolean) : ["mon"],
+      max_concurrency: record.max_concurrency,
+    };
+  }
+  return {
+    name: record.name,
+    enabled: record.status === "enabled",
+    schedule_type: "daily",
+    once_date: dayjs().add(1, "day"),
+    schedule_time: parseTimeValue(record.schedule_expr),
+    weekly_days: ["mon"],
+    max_concurrency: record.max_concurrency,
+  };
+}
+
+function safeFileName(value: string) {
+  return value
+    .trim()
+    .replace(/[\\/:*?"<>|]/g, "-")
+    .replace(/\s+/g, "_")
+    .slice(0, 80) || "profile_input_template";
+}
+
+function downloadBlob(fileName: string, blob: Blob) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function profileGroupId(profile: ProfileRecord) {
+  const raw = profile.group_summary?.id;
+  return raw === null || raw === undefined || raw === "" ? "__ungrouped__" : String(raw);
+}
+
+function workflowRunGroupIds(workflow: WorkflowRecord | null | undefined) {
+  const policy = workflow?.normalized_workflow_json?.profile_policy;
+  if (!policy || typeof policy !== "object") {
+    return [];
+  }
+  const groupIds = (policy as Record<string, unknown>).group_ids;
+  return Array.isArray(groupIds) ? groupIds.map(String).filter(Boolean) : [];
+}
+
+function countProfilesInGroups(profiles: ProfileRecord[] | null | undefined, groupIds: string[]) {
+  const groupSet = new Set(groupIds);
+  return (profiles ?? []).filter((profile) => groupSet.has(profileGroupId(profile))).length;
+}
+
+function groupSummaryLabel(groups: ProviderGroupRecord[] | null | undefined, groupIds: string[]) {
+  if (!groupIds.length) {
+    return "未关联 Profile 组";
+  }
+  const nameById = new Map((groups ?? []).map((group) => [String(group.external_group_id), group.display_name]));
+  return groupIds
+    .slice(0, 5)
+    .map((id) => nameById.get(id) ?? id)
+    .join("、") + (groupIds.length > 5 ? ` 等 ${groupIds.length} 组` : "");
+}
+
+function mappingErrorMessage(result: InputProfileMappingValidation) {
+  const parts: string[] = [];
+  if (result.invalid_rows.length) {
+    parts.push("存在空 profile_id 或缺少 profile_id 列");
+  }
+  if (result.duplicate_profile_ids.length) {
+    parts.push(`重复: ${result.duplicate_profile_ids.slice(0, 5).join(", ")}`);
+  }
+  if (result.out_of_scope_profile_ids.length) {
+    parts.push(`不在流程 Profile 组内: ${result.out_of_scope_profile_ids.slice(0, 5).join(", ")}`);
+  }
+  if (result.missing_profile_ids.length) {
+    parts.push(`缺少: ${result.missing_profile_ids.slice(0, 5).join(", ")}`);
+  }
+  return parts.join("；") || "表格 profile_id 映射校验失败";
+}
+
 export function SchedulesPage() {
   const providers = usePolling(api.listProviders, 10000);
   const workflows = usePolling(api.listWorkflows, 10000);
-  const schedules = usePolling(api.listSchedules, 8000);
+  const [scheduleReloadKey, setScheduleReloadKey] = useState(0);
+  const schedulesFetcher = useCallback(() => api.listSchedules(), [scheduleReloadKey]);
+  const schedules = usePolling(schedulesFetcher, 8000);
   const [form] = Form.useForm();
+  const [editForm] = Form.useForm();
   const scheduleType = Form.useWatch("schedule_type", form) ?? "daily";
-  const [inputRows, setInputRows] = useState<ScheduleInputRow[]>([createEmptyInputRow()]);
+  const editScheduleType = Form.useWatch("schedule_type", editForm) ?? "daily";
+  const selectedWorkflowId = Form.useWatch("workflow_id", form);
+  const selectedProviderType = Form.useWatch("provider_type", form);
+  const [inputRows, setInputRows] = useState<ScheduleInputRow[]>([]);
   const [importingInput, setImportingInput] = useState(false);
   const [inputFileName, setInputFileName] = useState<string | null>(null);
+  const [selectedInputFile, setSelectedInputFile] = useState<File | null>(null);
   const [detectedColumns, setDetectedColumns] = useState<string[]>(DEFAULT_INPUT_COLUMNS);
+  const [mappingValidation, setMappingValidation] = useState<InputProfileMappingValidation | null>(null);
+  const [editingSchedule, setEditingSchedule] = useState<ScheduleRecord | null>(null);
+  const [scheduleActionLoadingId, setScheduleActionLoadingId] = useState<string | null>(null);
 
   const providerOptions = useMemo(
     () => (providers.data ?? []).map((item) => ({ value: item.provider_type, label: item.display_name })),
@@ -150,12 +259,45 @@ export function SchedulesPage() {
     () => (workflows.data ?? []).map((item) => ({ value: item.id, label: item.name })),
     [workflows.data],
   );
+  const selectedWorkflow = useMemo(
+    () => (workflows.data ?? []).find((workflow) => workflow.id === selectedWorkflowId) ?? null,
+    [selectedWorkflowId, workflows.data],
+  );
+  const selectedWorkflowProviderType = selectedWorkflow?.target_provider_type ?? selectedProviderType;
+  const groupsFetcher = useCallback(
+    () => (selectedWorkflowProviderType ? api.listProviderGroups(selectedWorkflowProviderType) : Promise.resolve([])),
+    [selectedWorkflowProviderType],
+  );
+  const profilesFetcher = useCallback(
+    () =>
+      selectedWorkflowProviderType
+        ? api.listProfiles(selectedWorkflowProviderType, { managed_only: true })
+        : Promise.resolve([]),
+    [selectedWorkflowProviderType],
+  );
+  const providerGroups = usePolling(groupsFetcher, 12000);
+  const providerProfiles = usePolling(profilesFetcher, 12000);
+  const selectedWorkflowGroupIds = useMemo(() => workflowRunGroupIds(selectedWorkflow), [selectedWorkflow]);
+  const selectedWorkflowProfileCount = useMemo(
+    () => countProfilesInGroups(providerProfiles.data, selectedWorkflowGroupIds),
+    [providerProfiles.data, selectedWorkflowGroupIds],
+  );
+  const selectedWorkflowGroupSummary = useMemo(
+    () => groupSummaryLabel(providerGroups.data, selectedWorkflowGroupIds),
+    [providerGroups.data, selectedWorkflowGroupIds],
+  );
 
   useEffect(() => {
     if (!form.getFieldValue("provider_type") && providers.data?.length) {
       form.setFieldValue("provider_type", providers.data[0].provider_type);
     }
   }, [form, providers.data]);
+
+  useEffect(() => {
+    if (selectedWorkflow?.target_provider_type && selectedWorkflow.target_provider_type !== form.getFieldValue("provider_type")) {
+      form.setFieldValue("provider_type", selectedWorkflow.target_provider_type);
+    }
+  }, [form, selectedWorkflow]);
 
   const inputColumnKeys = useMemo(() => {
     const keys = new Set(detectedColumns.length ? detectedColumns : DEFAULT_INPUT_COLUMNS);
@@ -164,45 +306,35 @@ export function SchedulesPage() {
     });
     return Array.from(keys);
   }, [detectedColumns, inputRows]);
-  const previewInputRows = useMemo(() => inputRows.slice(0, 5), [inputRows]);
-
-  const updateInputCell = (id: string, key: string, value: string) => {
-    setInputRows((rows) =>
-      rows.map((row) => (row.id === id ? { ...row, payload: { ...row.payload, [key]: value } } : row)),
-    );
-  };
-
-  const addInputRow = () => {
-    setInputRows((rows) => [
-      ...rows,
-      {
-        id: crypto.randomUUID(),
-        payload: Object.fromEntries(inputColumnKeys.map((key) => [key, ""])),
-      },
-    ]);
-  };
-
-  const removeInputRow = (id: string) => {
-    setInputRows((rows) => (rows.length > 1 ? rows.filter((row) => row.id !== id) : rows));
-  };
-
   const resetInputRows = () => {
-    setInputRows([createEmptyInputRow()]);
+    setInputRows([]);
     setDetectedColumns(DEFAULT_INPUT_COLUMNS);
     setInputFileName(null);
+    setSelectedInputFile(null);
+    setMappingValidation(null);
   };
 
   const handleImportInputFile = async (file: File) => {
     setImportingInput(true);
     try {
-      const result = await api.parseScheduleInputFile(file);
+      const workflowId = form.getFieldValue("workflow_id");
+      const providerType = form.getFieldValue("provider_type");
+      if (!workflowId) {
+        throw new Error("请先选择流程，再导入表格");
+      }
+      const result = await api.validateInputProfileMap(file, workflowId, providerType, true);
+      if (!result.valid) {
+        throw new Error(mappingErrorMessage(result));
+      }
       if (!result.rows.length) {
         throw new Error("文件没有可导入的数据行");
       }
       setInputRows(normalizeImportedRows(result.rows));
       setDetectedColumns(result.detected_columns.length ? result.detected_columns : Object.keys(result.rows[0] ?? {}));
       setInputFileName(file.name);
-      message.success(`已导入 ${result.total_rows} 行数据`);
+      setSelectedInputFile(file);
+      setMappingValidation(result);
+      message.success(`已导入并匹配 ${result.matched_count}/${result.total_rows} 行数据`);
     } catch (cause) {
       message.error(cause instanceof Error ? cause.message : "导入失败");
     } finally {
@@ -211,13 +343,37 @@ export function SchedulesPage() {
   };
 
   const uploadProps: UploadProps = {
-    accept: ".csv,.txt,.xlsx,.xlsm",
+    accept: ".xlsx,.xlsm",
     beforeUpload: (file) => {
       void handleImportInputFile(file);
       return false;
     },
     maxCount: 1,
     showUploadList: false,
+  };
+
+  const handleDownloadTemplate = async () => {
+    if (!selectedWorkflowId || !selectedWorkflow) {
+      message.warning("请先选择流程");
+      return;
+    }
+    try {
+      const blob = await api.downloadWorkflowInputTemplate(selectedWorkflowId);
+      downloadBlob(`${safeFileName(selectedWorkflow.name)}_流程参数模板.xlsx`, blob);
+      message.success("模板已导出");
+    } catch (cause) {
+      message.error(cause instanceof Error ? cause.message : "导出模板失败");
+    }
+  };
+
+  const handleReplaceScheduleFile = async (schedule: ScheduleRecord, file: File) => {
+    try {
+      await api.replaceScheduleInputFile(schedule.id, file);
+      setScheduleReloadKey((value) => value + 1);
+      message.success("定时任务表格已替换");
+    } catch (cause) {
+      message.error(cause instanceof Error ? cause.message : "替换表格失败");
+    }
   };
 
   const buildScheduleExpr = (values: Record<string, unknown>) => {
@@ -247,29 +403,147 @@ export function SchedulesPage() {
     try {
       const values = await form.validateFields();
       const inlineRows = inputRows.map(rowToPayload).filter((row) => Object.keys(row).length > 0);
-      if (!inlineRows.length) {
-        throw new Error("请至少填写一行表格数据");
+      if (!selectedInputFile || !mappingValidation?.valid) {
+        throw new Error("请先导入并校验一个 Excel 表格");
       }
-      await api.createSchedule({
-        name: values.name,
-        provider_type: values.provider_type,
-        workflow_id: values.workflow_id,
-        schedule_type: values.schedule_type,
-        schedule_expr: buildScheduleExpr(values),
-        timezone: BEIJING_TIMEZONE,
-        max_concurrency: values.max_concurrency,
-        enabled: true,
-        profile_policy_snapshot: { selection_mode: "all_profiles", profile_ids: [] },
-        input_source: { inline_rows: inlineRows },
-        retry_once_on_failure: true,
+      if (!inlineRows.length) {
+        throw new Error("Excel 没有可执行数据行");
+      }
+      if (!selectedWorkflow) {
+        throw new Error("请先选择流程");
+      }
+      if (!selectedWorkflowGroupIds.length) {
+        throw new Error("当前流程未关联 Profile 组，无法创建定时任务。请先到流程列表里点击“关联 Profile 组”。");
+      }
+      if (providerProfiles.loading || providerGroups.loading) {
+        message.info("正在读取流程绑定的 Profile 组，请稍等几秒后再创建计划。");
+        return;
+      }
+      if (selectedWorkflowProfileCount <= 0) {
+        throw new Error("当前流程绑定的 Profile 组没有命中可管理 Profile，请检查 Provider 管理范围。");
+      }
+      const scheduleExpr = buildScheduleExpr(values);
+      Modal.confirm({
+        title: "确认创建这个定时任务？",
+        okText: "确认创建",
+        cancelText: "取消",
+        content: (
+          <Space direction="vertical" size={8}>
+            <Typography.Text>流程：{selectedWorkflow.name}</Typography.Text>
+            <Typography.Text>Profile 组：{selectedWorkflowGroupSummary}</Typography.Text>
+            <Typography.Text>可运行 Profile：{selectedWorkflowProfileCount} 个</Typography.Text>
+            <Typography.Text>并发槽位：{values.max_concurrency}</Typography.Text>
+            <Typography.Text>表格数据：{inlineRows.length} 行</Typography.Text>
+          </Space>
+        ),
+        onOk: async () => {
+          try {
+            const created = await api.createSchedule({
+              name: values.name,
+              provider_type: values.provider_type,
+              workflow_id: values.workflow_id,
+              schedule_type: values.schedule_type,
+              schedule_expr: scheduleExpr,
+              timezone: BEIJING_TIMEZONE,
+              max_concurrency: values.max_concurrency,
+              enabled: true,
+              profile_policy_snapshot: {},
+              input_source: { inline_rows: inlineRows },
+              retry_once_on_failure: true,
+            });
+            if (selectedInputFile) {
+              await api.replaceScheduleInputFile(created.id, selectedInputFile);
+            }
+            message.success("定时任务已创建");
+            form.resetFields();
+            resetInputRows();
+            setScheduleReloadKey((value) => value + 1);
+          } catch (cause) {
+            if (cause instanceof Error) {
+              message.error(cause.message);
+            }
+          }
+        },
       });
-      message.success("定时任务已创建");
-      form.resetFields();
-      resetInputRows();
     } catch (cause) {
       if (cause instanceof Error) {
         message.error(cause.message);
       }
+    }
+  };
+
+  const buildSchedulePayload = (
+    record: ScheduleRecord,
+    values: Record<string, unknown>,
+    options?: { enabled?: boolean },
+  ) => ({
+    name: values.name ?? record.name,
+    provider_type: record.provider_type,
+    workflow_id: record.workflow_id,
+    schedule_type: values.schedule_type ?? record.schedule_type,
+    schedule_expr: buildScheduleExpr({
+      schedule_type: values.schedule_type ?? record.schedule_type,
+      schedule_time: values.schedule_time,
+      once_date: values.once_date,
+      weekly_days: values.weekly_days,
+    }),
+    timezone: BEIJING_TIMEZONE,
+    max_concurrency: values.max_concurrency ?? record.max_concurrency,
+    enabled: options?.enabled ?? Boolean(values.enabled),
+    profile_policy_snapshot: record.profile_policy_snapshot ?? {},
+    input_source: record.input_source ?? {},
+    retry_once_on_failure: record.retry_once_on_failure ?? true,
+  });
+
+  const openEditSchedule = (record: ScheduleRecord) => {
+    setEditingSchedule(record);
+    editForm.setFieldsValue(scheduleInitialValues(record));
+  };
+
+  const handleUpdateSchedule = async () => {
+    if (!editingSchedule) {
+      return;
+    }
+    try {
+      const values = await editForm.validateFields();
+      setScheduleActionLoadingId(editingSchedule.id);
+      await api.updateSchedule(editingSchedule.id, buildSchedulePayload(editingSchedule, values));
+      setEditingSchedule(null);
+      setScheduleReloadKey((value) => value + 1);
+      message.success("定时任务已更新");
+    } catch (cause) {
+      if (cause instanceof Error) {
+        message.error(cause.message);
+      }
+    } finally {
+      setScheduleActionLoadingId(null);
+    }
+  };
+
+  const handleToggleSchedule = async (record: ScheduleRecord) => {
+    try {
+      setScheduleActionLoadingId(record.id);
+      const values = scheduleInitialValues(record);
+      await api.updateSchedule(record.id, buildSchedulePayload(record, values, { enabled: record.status !== "enabled" }));
+      setScheduleReloadKey((value) => value + 1);
+      message.success(record.status === "enabled" ? "定时任务已停用" : "定时任务已启用");
+    } catch (cause) {
+      message.error(cause instanceof Error ? cause.message : "操作失败");
+    } finally {
+      setScheduleActionLoadingId(null);
+    }
+  };
+
+  const handleDeleteSchedule = async (record: ScheduleRecord) => {
+    try {
+      setScheduleActionLoadingId(record.id);
+      await api.deleteSchedule(record.id);
+      setScheduleReloadKey((value) => value + 1);
+      message.success("定时任务已删除");
+    } catch (cause) {
+      message.error(cause instanceof Error ? cause.message : "删除失败");
+    } finally {
+      setScheduleActionLoadingId(null);
     }
   };
 
@@ -355,69 +629,39 @@ export function SchedulesPage() {
             <div className="schedule-panel">
               <Space className="schedule-panel-heading" wrap>
                 <div>
-                  <Typography.Text className="section-eyebrow">输入表格数据</Typography.Text>
-                  <Typography.Title level={5}>导入 CSV / Excel，或手动补几行</Typography.Title>
+                  <Typography.Text className="section-eyebrow">输入 Excel 数据</Typography.Text>
+                  <Typography.Title level={5}>只能导入流程参数 Excel</Typography.Title>
                 </div>
                 <Space wrap>
+                  <Button size="small" icon={<Download size={14} />} disabled={!selectedWorkflowId} onClick={() => void handleDownloadTemplate()}>
+                    下载流程参数模板
+                  </Button>
                   <Upload {...uploadProps}>
                     <Button size="small" loading={importingInput} icon={<UploadCloud size={14} />}>
-                      导入表格
+                      导入 Excel
                     </Button>
                   </Upload>
-                  <Button size="small" icon={<Plus size={14} />} onClick={addInputRow}>
-                    新增一行
-                  </Button>
                 </Space>
               </Space>
               <div className="schedule-input-summary">
                 <Typography.Text type="secondary">
                   {inputFileName
                     ? `已导入：${inputFileName}，仅预览前 5 行，保存时会使用全部数据。`
-                    : "支持和批次一样的 CSV / Excel 文件；表头会作为 row 字段保存。"}
+                    : "请先下载流程参数模板，补齐业务字段后导入 .xlsx / .xlsm 文件。"}
                 </Typography.Text>
                 <Tag color="gold">{inputRows.length} 行</Tag>
                 <Tag color="cyan">{inputColumnKeys.length} 列</Tag>
+                {mappingValidation ? (
+                  <Tag color={mappingValidation.valid ? "green" : "red"}>
+                    匹配 {mappingValidation.matched_count}/{mappingValidation.total_rows}
+                  </Tag>
+                ) : null}
                 {inputFileName ? (
                   <Button size="small" danger type="text" icon={<Trash2 size={14} />} onClick={resetInputRows}>
                     移除表格
                   </Button>
                 ) : null}
               </div>
-              <Table
-                className="schedule-input-table"
-                rowKey="id"
-                size="small"
-                pagination={false}
-                scroll={{ x: 760 }}
-                dataSource={previewInputRows}
-                columns={[
-                  ...inputColumnKeys.map((key) => ({
-                    key,
-                    title: INPUT_COLUMN_LABELS[key] ?? key,
-                    minWidth: 180,
-                    render: (_value: unknown, row: ScheduleInputRow) => (
-                      <Input
-                        value={normalizeCellValue(row.payload[key])}
-                        placeholder={key === "keyword" ? "Bags" : "可选"}
-                        onChange={(event) => updateInputCell(row.id, key, event.target.value)}
-                      />
-                    ),
-                  })),
-                  {
-                    title: "操作",
-                    width: 90,
-                    render: (_value: unknown, row: ScheduleInputRow) => (
-                      <Button
-                        size="small"
-                        danger
-                        icon={<Trash2 size={14} />}
-                        disabled={inputRows.length <= 1}
-                        onClick={() => removeInputRow(row.id)}
-                      />
-                    ),
-                  },
-                ]}
-              />
             </div>
 
             <div className="schedule-submit-bar">
@@ -458,11 +702,141 @@ export function SchedulesPage() {
             {
               title: "状态",
               dataIndex: "status",
-              render: (value: string) => <Tag color={value === "enabled" ? "green" : "default"}>{value === "enabled" ? "启用" : "停用"}</Tag>,
+              render: (value: string) => <Tag color={statusColor(value)}>{statusLabel(value)}</Tag>,
+            },
+            {
+              title: "槽位",
+              dataIndex: "max_concurrency",
+              width: 80,
+            },
+            {
+              title: "表格",
+              render: (_value: unknown, record: ScheduleRecord) => {
+                const originalName = typeof record.input_source?.original_file_name === "string"
+                  ? record.input_source.original_file_name
+                  : "未上传 Excel";
+                const replaceProps: UploadProps = {
+                  accept: ".xlsx,.xlsm",
+                  beforeUpload: (file) => {
+                    void handleReplaceScheduleFile(record, file);
+                    return false;
+                  },
+                  maxCount: 1,
+                  showUploadList: false,
+                };
+                return (
+                  <Space size={8} wrap>
+                    <Tag color={originalName === "未上传 Excel" ? "default" : "blue"}>{originalName}</Tag>
+                    <Upload {...replaceProps}>
+                      <Button size="small" icon={<UploadCloud size={14} />}>
+                        替换表格
+                      </Button>
+                    </Upload>
+                  </Space>
+                );
+              },
+            },
+            {
+              title: "操作",
+              fixed: "right",
+              width: 220,
+              render: (_value: unknown, record: ScheduleRecord) => (
+                <Space size={6} wrap>
+                  <Button
+                    size="small"
+                    icon={<Pencil size={14} />}
+                    loading={scheduleActionLoadingId === record.id}
+                    onClick={() => openEditSchedule(record)}
+                  >
+                    编辑
+                  </Button>
+                  <Button
+                    size="small"
+                    loading={scheduleActionLoadingId === record.id}
+                    onClick={() => void handleToggleSchedule(record)}
+                  >
+                    {record.status === "enabled" ? "停用" : "启用"}
+                  </Button>
+                  <Popconfirm
+                    title="删除这个定时任务？"
+                    description="删除后不会再自动触发，已生成的历史批次不会删除。"
+                    okText="删除"
+                    cancelText="取消"
+                    okButtonProps={{ danger: true }}
+                    onConfirm={() => void handleDeleteSchedule(record)}
+                  >
+                    <Button size="small" danger icon={<Trash2 size={14} />} loading={scheduleActionLoadingId === record.id}>
+                      删除
+                    </Button>
+                  </Popconfirm>
+                </Space>
+              ),
             },
           ]}
         />
       </SectionCard>
+      <Modal
+        title="编辑定时任务"
+        open={Boolean(editingSchedule)}
+        okText="保存修改"
+        cancelText="取消"
+        confirmLoading={Boolean(editingSchedule && scheduleActionLoadingId === editingSchedule.id)}
+        onOk={() => void handleUpdateSchedule()}
+        onCancel={() => {
+          setEditingSchedule(null);
+          editForm.resetFields();
+        }}
+      >
+        {editingSchedule ? (
+          <Form
+            form={editForm}
+            layout="vertical"
+            initialValues={scheduleInitialValues(editingSchedule)}
+          >
+            <Form.Item name="name" label="计划名称" rules={[{ required: true, message: "请输入计划名称" }]}>
+              <Input />
+            </Form.Item>
+            <Form.Item name="enabled" label="状态">
+              <Radio.Group
+                options={[
+                  { value: true, label: "启用" },
+                  { value: false, label: "停用" },
+                ]}
+              />
+            </Form.Item>
+            <Form.Item name="schedule_type" label="类型">
+              <Radio.Group
+                buttonStyle="solid"
+                optionType="button"
+                options={[
+                  { value: "once", label: "一次性" },
+                  { value: "daily", label: "每天" },
+                  { value: "weekly", label: "每周" },
+                ]}
+              />
+            </Form.Item>
+            {editScheduleType === "once" ? (
+              <Form.Item name="once_date" label="执行日期" rules={[{ required: true }]}>
+                <DatePicker style={{ width: "100%" }} />
+              </Form.Item>
+            ) : null}
+            <Form.Item name="schedule_time" label="执行时间" rules={[{ required: true }]}>
+              <TimePicker format="HH:mm" minuteStep={5} style={{ width: "100%" }} />
+            </Form.Item>
+            {editScheduleType === "weekly" ? (
+              <Form.Item name="weekly_days" label="每周哪几天执行" rules={[{ required: true }]}>
+                <Checkbox.Group className="schedule-weekday-grid" options={WEEKDAY_OPTIONS} />
+              </Form.Item>
+            ) : null}
+            <Form.Item name="max_concurrency" label="并发槽位">
+              <InputNumber min={1} max={10} style={{ width: "100%" }} />
+            </Form.Item>
+            <Typography.Paragraph type="secondary">
+              当前流程和 Excel 表格不在编辑弹窗中切换；如需更换数据，请在计划列表中点击“替换表格”。
+            </Typography.Paragraph>
+          </Form>
+        ) : null}
+      </Modal>
     </Space>
   );
 }

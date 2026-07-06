@@ -2,6 +2,7 @@ import type {
   BatchDetail,
   BatchSummary,
   InputFileParseResult,
+  InputProfileMappingValidation,
   LocatorLivePreview,
   LocatorPickResult,
   ProfileRecord,
@@ -114,6 +115,20 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     }
   }
   throw new Error("本地 Runtime 尚未就绪，请稍等几秒后重试。");
+}
+
+async function requestBlob(path: string, init?: RequestInit): Promise<Blob> {
+  const response = await fetch(`${runtimeBaseUrl()}${path}`, {
+    ...init,
+    headers: {
+      ...(runtimeToken ? { "X-OpController-Token": runtimeToken } : {}),
+      ...init?.headers,
+    },
+  });
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+  return response.blob();
 }
 
 export const api = {
@@ -233,16 +248,39 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
-  importBatch: async (file: File, providerType: string) => {
+  importBatch: async (file: File, providerType: string, workflowId?: string | null) => {
     const form = new FormData();
     form.append("file", file);
     form.append("provider_type", providerType);
+    if (workflowId) {
+      form.append("workflow_id", workflowId);
+    }
     return request<{
       batch: BatchDetail;
       detected_columns: string[];
       preview_rows: Record<string, unknown>[];
     }>("/batches/import", { method: "POST", body: form });
   },
+  validateInputProfileMap: async (
+    file: File,
+    workflowId: string,
+    providerType?: string | null,
+    strict = true,
+  ) => {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("workflow_id", workflowId);
+    if (providerType) {
+      form.append("provider_type", providerType);
+    }
+    form.append("strict", String(strict));
+    return request<InputProfileMappingValidation>("/input-files/validate-profile-map", {
+      method: "POST",
+      body: form,
+    });
+  },
+  downloadWorkflowInputTemplate: (workflowId: string) =>
+    requestBlob(`/workflows/${workflowId}/input-template`),
   parseScheduleInputFile: async (file: File) => {
     const form = new FormData();
     form.append("file", file);
@@ -265,10 +303,20 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+  replaceScheduleInputFile: async (scheduleId: string, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return request<ScheduleRecord>(`/schedules/${scheduleId}/input-file`, {
+      method: "POST",
+      body: form,
+    });
+  },
   updateSchedule: (scheduleId: string, payload: Record<string, unknown>) =>
     request<ScheduleRecord>(`/schedules/${scheduleId}`, {
       method: "PUT",
       body: JSON.stringify(payload),
     }),
+  deleteSchedule: (scheduleId: string) =>
+    request<{ status: string }>(`/schedules/${scheduleId}`, { method: "DELETE" }),
   getResultBatch: (batchId: string) => request<BatchDetail>(`/results/batches/${batchId}`),
 };

@@ -5,6 +5,7 @@ import { api } from "../api/client";
 import { MetricCard } from "../components/MetricCard";
 import { SectionCard } from "../components/SectionCard";
 import { usePolling } from "../hooks/usePolling";
+import { statusColor, statusLabel } from "../utils/status";
 
 export function DashboardPage() {
   const system = usePolling(api.systemCheck, 15000);
@@ -54,7 +55,7 @@ export function DashboardPage() {
                       <Typography.Text type="secondary">{provider.health.message}</Typography.Text>
                     </div>
                     <Tag color={provider.health.healthy ? "green" : "red"}>
-                      {provider.health.healthy ? "Ready" : "Unavailable"}
+                      {provider.health.healthy ? "可用" : "不可用"}
                     </Tag>
                   </div>
                 ))}
@@ -76,8 +77,8 @@ export function DashboardPage() {
                   title: "状态",
                   dataIndex: "status",
                   render: (value: string) => (
-                    <Tag color={value === "completed" ? "green" : value === "failed" ? "red" : "gold"}>
-                      {value}
+                    <Tag color={statusColor(value)}>
+                      {statusLabel(value)}
                     </Tag>
                   ),
                 },
@@ -94,4 +95,3 @@ export function DashboardPage() {
     </Space>
   );
 }
-

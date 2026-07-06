@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+import re
 from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -13,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.models import BatchRecord, BatchRowRecord, BatchStatus, ScheduleRecord, ScheduleStatus
 from app.schemas.batch import StartBatchRequest
 from app.schemas.schedule import ScheduleDefinition, ScheduleRecordOut
+from app.config import settings
 from app.services.batch_service import BatchService
 from app.services.monitor_service import MonitorService
 
@@ -56,6 +58,10 @@ class ScheduleService:
         payload: ScheduleDefinition,
         schedule_id: str | None = None,
     ) -> ScheduleRecordOut:
+        profile_policy_snapshot = payload.profile_policy_snapshot or await self._workflow_profile_policy(
+            session,
+            payload.workflow_id,
+        )
         if schedule_id:
             row = await session.get(ScheduleRecord, schedule_id)
             if not row:
@@ -64,7 +70,7 @@ class ScheduleService:
             row.status = ScheduleStatus.ENABLED if payload.enabled else ScheduleStatus.DISABLED
             row.workflow_id = payload.workflow_id
             row.provider_type = payload.provider_type
-            row.profile_policy_snapshot = payload.profile_policy_snapshot
+            row.profile_policy_snapshot = profile_policy_snapshot
             row.input_source = payload.input_source
             row.schedule_type = payload.schedule_type
             row.schedule_expr = payload.schedule_expr
@@ -77,7 +83,7 @@ class ScheduleService:
                 status=ScheduleStatus.ENABLED if payload.enabled else ScheduleStatus.DISABLED,
                 workflow_id=payload.workflow_id,
                 provider_type=payload.provider_type,
-                profile_policy_snapshot=payload.profile_policy_snapshot,
+                profile_policy_snapshot=profile_policy_snapshot,
                 input_source=payload.input_source,
                 schedule_type=payload.schedule_type,
                 schedule_expr=payload.schedule_expr,
@@ -96,6 +102,61 @@ class ScheduleService:
             except Exception:  # noqa: BLE001
                 pass
         return self._to_out(row)
+
+    async def _workflow_profile_policy(self, session: AsyncSession, workflow_id: str) -> dict[str, Any]:
+        workflow_record = await self.batch_service.workflow_service.get_workflow(session, workflow_id)
+        return dict((workflow_record.normalized_workflow_json or {}).get("profile_policy") or {})
+
+    async def save_schedule_input_file(
+        self,
+        session: AsyncSession,
+        *,
+        schedule_id: str,
+        file_name: str,
+        content: bytes,
+    ) -> ScheduleRecordOut:
+        row = await session.get(ScheduleRecord, schedule_id)
+        if not row:
+            raise ValueError(f"schedule not found: {schedule_id}")
+        validation = await self.batch_service.validate_profile_mapping_from_file(
+            session,
+            workflow_id=row.workflow_id,
+            provider_type=row.provider_type,
+            file_name=file_name,
+            content=content,
+            strict=True,
+        )
+        if not validation.valid:
+            raise ValueError(self.batch_service._validation_error_message(validation))
+
+        safe_name = self._safe_file_name(file_name or "schedule_input.xlsx")
+        target_dir = settings.schedule_input_dir / row.id
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target_path = target_dir / safe_name
+        target_path.write_bytes(content)
+        row.input_source = {
+            "file_path": str(target_path),
+            "original_file_name": file_name,
+            "updated_at": datetime.utcnow().isoformat(),
+            "detected_columns": validation.detected_columns,
+            "total_rows": validation.total_rows,
+        }
+        await session.commit()
+        await session.refresh(row)
+        return self._to_out(row)
+
+    async def delete_schedule(self, session: AsyncSession, schedule_id: str) -> None:
+        row = await session.get(ScheduleRecord, schedule_id)
+        if not row:
+            raise ValueError(f"schedule not found: {schedule_id}")
+        try:
+            self.scheduler.remove_job(schedule_id)
+        except Exception:  # noqa: BLE001
+            pass
+        self._active_schedule_batches.pop(schedule_id, None)
+        self._running_schedule_ids.discard(schedule_id)
+        await session.delete(row)
+        await session.commit()
 
     def _register_job(self, schedule: ScheduleRecord) -> None:
         trigger = self._build_trigger(schedule.schedule_type, schedule.schedule_expr, schedule.timezone)
@@ -180,12 +241,14 @@ class ScheduleService:
         await session.flush()
         rows = await self._resolve_input_rows(schedule.input_source)
         for index, payload in enumerate(rows, start=1):
+            mapped_profile_id = self.batch_service._extract_profile_id(payload)
             session.add(
                 BatchRowRecord(
                     batch_id=batch.id,
                     row_index=index,
                     row_payload_json=payload,
-                    dedupe_key=str(payload.get("id") or index),
+                    dedupe_key=str(payload.get("id") or mapped_profile_id or index),
+                    mapped_profile_id=mapped_profile_id,
                 )
             )
         batch.total_rows = len(rows)
@@ -214,9 +277,20 @@ class ScheduleService:
             status=row.status.value,
             workflow_id=row.workflow_id,
             provider_type=row.provider_type,
+            profile_policy_snapshot=row.profile_policy_snapshot or {},
             schedule_type=row.schedule_type,
             schedule_expr=row.schedule_expr,
             timezone=row.timezone,
+            max_concurrency=row.max_concurrency,
+            retry_once_on_failure=row.retry_once_on_failure,
+            input_source=row.input_source or {},
             next_run_at=row.next_run_at,
             last_run_at=row.last_run_at,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
         )
+
+    @staticmethod
+    def _safe_file_name(file_name: str) -> str:
+        name = Path(file_name).name.strip() or "schedule_input.xlsx"
+        return re.sub(r'[<>:"/\\|?*]+', "-", name)[:120]

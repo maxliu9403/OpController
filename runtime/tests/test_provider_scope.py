@@ -47,6 +47,14 @@ def test_batch_profile_policy_filters_after_provider_scope() -> None:
 
     assert BatchService.apply_profile_policy(
         profiles,
+        {"selection_mode": "all_profiles"},
+    ) == profiles
+    assert BatchService.apply_profile_policy(
+        profiles,
+        {"selection_mode": "explicit_profiles", "profile_ids": []},
+    ) == []
+    assert BatchService.apply_profile_policy(
+        profiles,
         {"selection_mode": "by_group", "group_ids": ["g2"]},
     ) == [profiles[1]]
     assert BatchService.apply_profile_policy(

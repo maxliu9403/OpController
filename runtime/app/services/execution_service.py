@@ -76,6 +76,7 @@ class ExecutionService:
         playwright = None
         provider_profile_id: str | None = None
         session_opened = False
+        cancelled = False
         row_payload: dict[str, Any] = {}
         async with self.session_factory() as session:
             task = await session.get(TaskRunRecord, task_run_id)
@@ -143,6 +144,14 @@ class ExecutionService:
                     task.finished_at = datetime.utcnow()
                     task.outputs_json = context.variables
                     await session.commit()
+        except asyncio.CancelledError:
+            cancelled = True
+            await self._mark_task_cancelled(task_run_id)
+            await self._publish(
+                "task.cancelled",
+                {"task_run_id": task_run_id, "provider_profile_id": provider_profile_id},
+            )
+            raise
         except ExecutionError as exc:
             await self._mark_task_failed(task_run_id, exc.code, exc.message)
             await self._publish(
@@ -156,7 +165,7 @@ class ExecutionService:
                 {"task_run_id": task_run_id, "error_code": "unhandled_error", "message": str(exc)},
             )
         finally:
-            close_pause_seconds = await self._close_pause_seconds(task_run_id, workflow)
+            close_pause_seconds = 0 if cancelled else await self._close_pause_seconds(task_run_id, workflow)
             if close_pause_seconds > 0:
                 await self._publish(
                     "task.window_kept",
@@ -229,6 +238,16 @@ class ExecutionService:
                 task.status = TaskRunStatus.FAILED
                 task.error_code = error_code
                 task.error_message = error_message
+                task.finished_at = datetime.utcnow()
+                await session.commit()
+
+    async def _mark_task_cancelled(self, task_run_id: str) -> None:
+        async with self.session_factory() as session:
+            task = await session.get(TaskRunRecord, task_run_id)
+            if task and task.status not in {TaskRunStatus.SUCCEEDED, TaskRunStatus.FAILED, TaskRunStatus.CANCELLED}:
+                task.status = TaskRunStatus.CANCELLED
+                task.error_code = "batch_cancelled"
+                task.error_message = "批次已取消"
                 task.finished_at = datetime.utcnow()
                 await session.commit()
 
@@ -972,6 +991,15 @@ class ExecutionService:
                 output=self._step_output_summary(step, context),
                 locator_summary=self._locator_summary(step, context.workflow),
             )
+        except asyncio.CancelledError:
+            await self._finish_step_run(
+                step_run_id,
+                StepRunStatus.SKIPPED,
+                error_code="batch_cancelled",
+                error_message="批次已取消",
+                locator_summary=self._locator_summary(step, context.workflow),
+            )
+            raise
         except ExecutionError as exc:
             screenshot_path = None
             if context.workflow.runtime_policy.screenshot_on_failure:

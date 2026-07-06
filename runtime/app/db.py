@@ -49,6 +49,12 @@ async def _run_lightweight_migrations(conn) -> None:
     await conn.execute(
         text("UPDATE workflow_templates SET folder = '未分组' WHERE folder IS NULL OR folder = ''")
     )
+    result = await conn.execute(text("PRAGMA table_info(batch_rows)"))
+    batch_row_columns = {row[1] for row in result.fetchall()}
+    if "mapped_profile_id" not in batch_row_columns:
+        await conn.execute(
+            text("ALTER TABLE batch_rows ADD COLUMN mapped_profile_id VARCHAR(128)")
+        )
 
 
 async def get_session() -> AsyncIterator[AsyncSession]:

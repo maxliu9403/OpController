@@ -1,20 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+import csv
+import io
 import math
 import platform
 import re
 import subprocess
-import csv
-import io
 from dataclasses import dataclass, field
 from datetime import datetime
-from itertools import cycle
 from pathlib import Path
 from typing import Any
 
-from openpyxl import load_workbook
-from sqlalchemy import select
+from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Alignment, Font, PatternFill
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import settings
@@ -32,7 +32,9 @@ from app.schemas.batch import (
     BatchDetail,
     BatchImportResult,
     BatchRowPayload,
+    BatchTaskRunSummary,
     BatchSummary,
+    InputProfileMappingValidation,
     InputFileParseResult,
     StartBatchRequest,
     StepRunDetail,
@@ -50,6 +52,7 @@ from app.services.workflow_service import WorkflowService
 class BatchControl:
     paused: asyncio.Event = field(default_factory=asyncio.Event)
     cancelled: bool = False
+    worker_tasks: set[asyncio.Task[Any]] = field(default_factory=set)
 
     def __post_init__(self) -> None:
         self.paused.set()
@@ -89,12 +92,24 @@ class BatchService:
         file_name: str,
         content: bytes,
         provider_type: str,
+        workflow_id: str | None = None,
     ) -> BatchImportResult:
         rows = self._parse_input_file(file_name, content)
+        validation: InputProfileMappingValidation | None = None
+        if workflow_id:
+            validation = await self.validate_profile_mapping(
+                session,
+                workflow_id=workflow_id,
+                provider_type=provider_type,
+                rows=rows,
+                strict=True,
+            )
+            if not validation.valid:
+                raise ValueError(self._validation_error_message(validation))
         batch = BatchRecord(
             name=f"Imported {file_name}",
             provider_type=provider_type,
-            workflow_id="",
+            workflow_id=workflow_id or "",
             status=BatchStatus.DRAFT,
             input_source="file",
             total_rows=len(rows),
@@ -102,12 +117,14 @@ class BatchService:
         session.add(batch)
         await session.flush()
         for index, payload in enumerate(rows, start=1):
+            mapped_profile_id = self._extract_profile_id(payload)
             session.add(
                 BatchRowRecord(
                     batch_id=batch.id,
                     row_index=index,
                     row_payload_json=payload,
-                    dedupe_key=str(payload.get("id") or payload.get("name") or index),
+                    dedupe_key=str(payload.get("id") or payload.get("name") or mapped_profile_id or index),
+                    mapped_profile_id=mapped_profile_id,
                 )
             )
         await session.commit()
@@ -127,6 +144,162 @@ class BatchService:
             rows=rows,
         )
 
+    async def validate_profile_mapping_from_file(
+        self,
+        session: AsyncSession,
+        *,
+        workflow_id: str,
+        provider_type: str | None,
+        file_name: str,
+        content: bytes,
+        strict: bool = True,
+    ) -> InputProfileMappingValidation:
+        rows = self._parse_input_file(file_name, content)
+        return await self.validate_profile_mapping(
+            session,
+            workflow_id=workflow_id,
+            provider_type=provider_type,
+            rows=rows,
+            strict=strict,
+        )
+
+    async def validate_profile_mapping(
+        self,
+        session: AsyncSession,
+        *,
+        workflow_id: str,
+        provider_type: str | None,
+        rows: list[dict[str, Any]],
+        strict: bool = True,
+    ) -> InputProfileMappingValidation:
+        workflow_record = await self.workflow_service.get_workflow(session, workflow_id)
+        workflow = WorkflowDefinition.model_validate(workflow_record.normalized_workflow_json)
+        effective_provider_type = provider_type or workflow.profile_policy.provider_type
+        profiles, empty_reason = await self._resolve_profiles(
+            session,
+            effective_provider_type,
+            workflow.profile_policy.model_dump(mode="json"),
+        )
+        detected_columns = list(rows[0].keys()) if rows else []
+        invalid_rows: list[dict[str, Any]] = []
+        missing_profile_ids: list[str] = []
+        duplicate_profile_ids: list[str] = []
+        out_of_scope_profile_ids: list[str] = []
+        warnings: list[str] = []
+        profile_ids: list[str] = []
+        seen: set[str] = set()
+        profile_id_set = {profile.external_profile_id for profile in profiles}
+
+        if not rows:
+            warnings.append("Excel/CSV 没有可执行数据行")
+        if "profile_id" not in detected_columns:
+            invalid_rows.append({"row_index": 1, "reason": "missing_profile_id_column"})
+        if not profiles:
+            warnings.append(
+                "Provider 管理范围未命中任何 Profile"
+                if empty_reason == "provider_scope_empty"
+                else "流程没有命中可运行 Profile，请先绑定运行 Profile 组"
+            )
+
+        for index, row in enumerate(rows, start=2):
+            profile_id = self._extract_profile_id(row)
+            if not profile_id:
+                invalid_rows.append({"row_index": index, "reason": "empty_profile_id"})
+                continue
+            profile_ids.append(profile_id)
+            if profile_id in seen and profile_id not in duplicate_profile_ids:
+                duplicate_profile_ids.append(profile_id)
+            seen.add(profile_id)
+            if profile_id not in profile_id_set and profile_id not in out_of_scope_profile_ids:
+                out_of_scope_profile_ids.append(profile_id)
+
+        missing_profile_ids = sorted(profile_id_set - set(profile_ids))
+        valid = not invalid_rows and not duplicate_profile_ids and not out_of_scope_profile_ids
+        if strict:
+            valid = valid and not missing_profile_ids and bool(rows) and bool(profiles)
+        else:
+            valid = bool(rows) and bool(profiles)
+
+        return InputProfileMappingValidation(
+            valid=valid,
+            total_rows=len(rows),
+            matched_count=sum(1 for profile_id in profile_ids if profile_id in profile_id_set),
+            skipped_count=len(out_of_scope_profile_ids) + len([item for item in invalid_rows if item.get("reason") == "empty_profile_id"]),
+            detected_columns=detected_columns,
+            preview_rows=rows[:5],
+            rows=rows,
+            missing_profile_ids=missing_profile_ids,
+            duplicate_profile_ids=duplicate_profile_ids,
+            out_of_scope_profile_ids=out_of_scope_profile_ids,
+            invalid_rows=invalid_rows,
+            warnings=warnings,
+        )
+
+    async def build_input_template_xlsx(
+        self,
+        session: AsyncSession,
+        *,
+        workflow_id: str,
+    ) -> bytes:
+        workflow_record = await self.workflow_service.get_workflow(session, workflow_id)
+        workflow = WorkflowDefinition.model_validate(workflow_record.normalized_workflow_json)
+        profiles, _ = await self._resolve_profiles(
+            session,
+            workflow.profile_policy.provider_type,
+            workflow.profile_policy.model_dump(mode="json"),
+        )
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = "Profile参数"
+        headers = ["profile_id", "profile_name", "group_name", "keyword", "note"]
+        sheet.append(headers)
+        header_fill = PatternFill("solid", fgColor="1F6F78")
+        header_font = Font(color="FFFFFF", bold=True)
+        for cell in sheet[1]:
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center")
+        for profile in profiles:
+            sheet.append(
+                [
+                    profile.external_profile_id,
+                    profile.display_name,
+                    str(profile.group_summary.get("name") or ""),
+                    "",
+                    "",
+                ]
+            )
+        sheet.freeze_panes = "A2"
+        sheet.auto_filter.ref = sheet.dimensions
+        for column in sheet.columns:
+            first_cell = column[0]
+            max_length = max(len(str(cell.value or "")) for cell in column)
+            sheet.column_dimensions[first_cell.column_letter].width = min(max(max_length + 2, 12), 36)
+        guide = workbook.create_sheet("使用说明")
+        guide_rows = [
+            ["主题", "说明"],
+            ["一行一个 Profile", "每一行代表一个指纹浏览器窗口的执行参数，系统会按 profile_id 精确绑定窗口。"],
+            ["必填列 profile_id", "不要删除 profile_id 列；它必须等于指纹浏览器中的 Profile ID。"],
+            ["可编辑列", "profile_name 和 group_name 用于识别窗口，通常不参与流程变量，可保留不改。"],
+            ["业务字段", "可以新增任意业务列，例如 keyword、price、shop_id、note。"],
+            ["流程变量", "流程节点中使用 ${row.keyword}、${row.price}、${row.shop_id} 读取同一行的字段值。"],
+            ["槽位说明", "槽位只控制同时打开的窗口数量；表格有多少个合法 profile_id，最终就会执行多少个 Profile。"],
+            ["校验规则", "导入时会检查 profile_id 是否为空、重复、或不在当前流程绑定的 Profile 组内。"],
+        ]
+        for row in guide_rows:
+            guide.append(row)
+        for cell in guide[1]:
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center")
+        guide.column_dimensions["A"].width = 20
+        guide.column_dimensions["B"].width = 92
+        for row in guide.iter_rows(min_row=2, max_col=2):
+            row[1].alignment = Alignment(wrap_text=True, vertical="top")
+        buffer = io.BytesIO()
+        workbook.save(buffer)
+        return buffer.getvalue()
+
     async def get_batch_detail(self, session: AsyncSession, batch_id: str) -> BatchDetail:
         batch = await session.get(BatchRecord, batch_id)
         if not batch:
@@ -134,25 +307,73 @@ class BatchService:
         row_result = await session.execute(
             select(BatchRowRecord).where(BatchRowRecord.batch_id == batch_id).order_by(BatchRowRecord.row_index.asc())
         )
+        row_records = list(row_result.scalars())
         rows = [
-            BatchRowPayload(row_index=row.row_index, dedupe_key=row.dedupe_key, payload=row.row_payload_json)
-            for row in row_result.scalars()
+            BatchRowPayload(
+                id=row.id,
+                row_index=row.row_index,
+                dedupe_key=row.dedupe_key,
+                payload=row.row_payload_json,
+                mapped_profile_id=row.mapped_profile_id,
+            )
+            for row in row_records
+        ]
+        row_index_by_id = {row.id: row.row_index for row in row_records}
+        task_result = await session.execute(
+            select(TaskRunRecord).where(TaskRunRecord.batch_id == batch_id).order_by(TaskRunRecord.created_at.asc())
+        )
+        tasks = [
+            BatchTaskRunSummary(
+                id=task.id,
+                batch_id=task.batch_id,
+                batch_row_id=task.batch_row_id,
+                row_index=row_index_by_id.get(task.batch_row_id),
+                provider_type=task.provider_type,
+                provider_profile_id=task.provider_profile_id,
+                status=task.status.value,
+                slot_index=task.slot_index,
+                error_code=task.error_code,
+                error_message=task.error_message,
+                outputs_json=task.outputs_json or {},
+                started_at=task.started_at,
+                finished_at=task.finished_at,
+            )
+            for task in task_result.scalars()
         ]
         return BatchDetail(
             **self._to_summary(batch).model_dump(),
             profile_policy_snapshot=batch.profile_policy_snapshot or {},
             result_summary_json=batch.result_summary_json or {},
             rows=rows,
+            tasks=tasks,
         )
 
     async def start_batch(self, session: AsyncSession, batch_id: str, request: StartBatchRequest) -> BatchDetail:
         batch = await session.get(BatchRecord, batch_id)
         if not batch:
             raise ValueError(f"batch not found: {batch_id}")
+        if batch.status in {BatchStatus.READY, BatchStatus.RUNNING, BatchStatus.PAUSED}:
+            raise ValueError("批次正在运行或等待运行，不能重复启动")
+        if batch.status == BatchStatus.COMPLETED:
+            raise ValueError("已完成批次不需要重试")
+        if batch.status in {BatchStatus.FAILED, BatchStatus.CANCELLED}:
+            await self._clear_batch_runs(session, batch.id)
+            batch.success_count = 0
+            batch.failure_count = 0
+            batch.average_duration_ms = 0
+            batch.result_summary_json = {}
+        workflow_record = await self.workflow_service.get_workflow(session, request.workflow_id)
+        workflow = WorkflowDefinition.model_validate(workflow_record.normalized_workflow_json)
         batch.workflow_id = request.workflow_id
         batch.provider_type = request.provider_type
         batch.runtime_mode = request.runtime_mode
-        batch.profile_policy_snapshot = request.profile_policy_snapshot
+        batch.profile_policy_snapshot = request.profile_policy_snapshot or workflow.profile_policy.model_dump(mode="json")
+        await self._validate_and_map_batch_rows(
+            session,
+            batch=batch,
+            profile_policy=batch.profile_policy_snapshot,
+            strict=batch.input_source != "schedule",
+        )
         batch.status = BatchStatus.READY
         await session.commit()
 
@@ -161,6 +382,14 @@ class BatchService:
         task = asyncio.create_task(self._run_batch(batch.id, request.requested_slots, control))
         self._active_jobs[batch.id] = task
         return await self.get_batch_detail(session, batch.id)
+
+    async def _clear_batch_runs(self, session: AsyncSession, batch_id: str) -> None:
+        task_result = await session.execute(select(TaskRunRecord.id).where(TaskRunRecord.batch_id == batch_id))
+        task_ids = list(task_result.scalars())
+        if not task_ids:
+            return
+        await session.execute(delete(StepRunRecord).where(StepRunRecord.task_run_id.in_(task_ids)))
+        await session.execute(delete(TaskRunRecord).where(TaskRunRecord.id.in_(task_ids)))
 
     async def pause_batch(self, session: AsyncSession, batch_id: str) -> BatchSummary:
         control = self._controls.setdefault(batch_id, BatchControl())
@@ -186,6 +415,9 @@ class BatchService:
         control = self._controls.setdefault(batch_id, BatchControl())
         control.cancelled = True
         control.paused.set()
+        for worker_task in list(control.worker_tasks):
+            if not worker_task.done():
+                worker_task.cancel()
         batch = await session.get(BatchRecord, batch_id)
         if batch:
             batch.status = BatchStatus.CANCELLED
@@ -218,6 +450,7 @@ class BatchService:
         return TaskRunDetail(
             id=task.id,
             batch_id=task.batch_id,
+            batch_row_id=task.batch_row_id,
             provider_type=task.provider_type,
             provider_profile_id=task.provider_profile_id,
             status=task.status.value,
@@ -232,6 +465,10 @@ class BatchService:
         async with self.session_factory() as session:
             batch = await session.get(BatchRecord, batch_id)
             if not batch:
+                return
+            if control.cancelled:
+                batch.status = BatchStatus.CANCELLED
+                await session.commit()
                 return
             workflow_record = await self.workflow_service.get_workflow(session, batch.workflow_id)
             workflow = WorkflowDefinition.model_validate(workflow_record.normalized_workflow_json)
@@ -254,20 +491,41 @@ class BatchService:
                 }
                 await session.commit()
                 return
+            profile_by_id = {profile.external_profile_id: profile for profile in profiles}
+            executable_rows = [row for row in rows if row.mapped_profile_id and row.mapped_profile_id in profile_by_id]
+            executable_row_ids = {row.id for row in executable_rows}
+            skipped_rows = [
+                {"row_index": row.row_index, "profile_id": row.mapped_profile_id or self._extract_profile_id(row.row_payload_json)}
+                for row in rows
+                if row.id not in executable_row_ids
+            ]
+            if not executable_rows:
+                batch.status = BatchStatus.FAILED
+                batch.result_summary_json = {
+                    "error": "Excel 中没有可执行的 profile_id",
+                    "total_rows": len(rows),
+                    "skipped_invalid_profile": len(skipped_rows),
+                    "skipped_rows": skipped_rows[:20],
+                }
+                await session.commit()
+                return
             screen_bounds = await self._read_screen_bounds()
             screen_capacity = self._estimate_visual_slot_capacity(screen_bounds)
-            slot_limit = max(1, min(requested_slots, settings.max_slot_limit, screen_capacity, len(profiles), len(rows)))
+            slot_limit = max(1, min(requested_slots, settings.max_slot_limit, screen_capacity, len(executable_rows)))
+            if control.cancelled:
+                batch.status = BatchStatus.CANCELLED
+                await session.commit()
+                return
             batch.status = BatchStatus.RUNNING
             await session.commit()
-            assignments = cycle(profiles)
             tasks: list[TaskRunRecord] = []
-            for row in rows:
-                profile = next(assignments)
+            for row in executable_rows:
+                profile_id = row.mapped_profile_id or self._extract_profile_id(row.row_payload_json)
                 task_run = TaskRunRecord(
                     batch_id=batch.id,
                     batch_row_id=row.id,
                     provider_type=batch.provider_type,
-                    provider_profile_id=profile.external_profile_id,
+                    provider_profile_id=profile_id,
                     slot_index=None,
                 )
                 session.add(task_run)
@@ -350,11 +608,19 @@ class BatchService:
                 finally:
                     task_queue.task_done()
 
+        worker_tasks = {asyncio.create_task(worker(slot_index)) for slot_index in range(slot_limit)}
+        control.worker_tasks = worker_tasks
         try:
-            await asyncio.gather(*(worker(slot_index) for slot_index in range(slot_limit)))
+            await asyncio.gather(*worker_tasks, return_exceptions=True)
             await self._mark_unfinished_tasks(batch_id, cancelled=control.cancelled)
             await self._finalize_batch(batch_id, cancelled=control.cancelled)
         finally:
+            for worker_task in worker_tasks:
+                if not worker_task.done():
+                    worker_task.cancel()
+            if any(not worker_task.done() for worker_task in worker_tasks):
+                await asyncio.gather(*worker_tasks, return_exceptions=True)
+            control.worker_tasks.clear()
             self._active_jobs.pop(batch_id, None)
             self._controls.pop(batch_id, None)
 
@@ -418,6 +684,8 @@ class BatchService:
                 "lost": lost_count,
                 "cancelled": cancelled_count,
                 "slot_pool": True,
+                "skipped_invalid_profile": (batch.result_summary_json or {}).get("skipped_invalid_profile", 0),
+                "skipped_rows": (batch.result_summary_json or {}).get("skipped_rows", []),
             }
             await session.commit()
 
@@ -644,26 +912,106 @@ end tell
             return [], "profile_policy_empty"
         return profiles, None
 
+    async def _validate_and_map_batch_rows(
+        self,
+        session: AsyncSession,
+        *,
+        batch: BatchRecord,
+        profile_policy: dict[str, Any],
+        strict: bool,
+    ) -> InputProfileMappingValidation:
+        profiles, empty_reason = await self._resolve_profiles(session, batch.provider_type, profile_policy)
+        rows_result = await session.execute(
+            select(BatchRowRecord).where(BatchRowRecord.batch_id == batch.id).order_by(BatchRowRecord.row_index.asc())
+        )
+        rows = list(rows_result.scalars())
+        validation = await self.validate_profile_mapping(
+            session,
+            workflow_id=batch.workflow_id,
+            provider_type=batch.provider_type,
+            rows=[row.row_payload_json for row in rows],
+            strict=strict,
+        )
+        profile_ids = {profile.external_profile_id for profile in profiles}
+        seen: set[str] = set()
+        skipped_rows: list[dict[str, Any]] = []
+        for row in rows:
+            profile_id = self._extract_profile_id(row.row_payload_json)
+            row.mapped_profile_id = None
+            if not profile_id:
+                skipped_rows.append({"row_index": row.row_index, "reason": "empty_profile_id"})
+                continue
+            if profile_id in seen:
+                skipped_rows.append({"row_index": row.row_index, "profile_id": profile_id, "reason": "duplicate_profile_id"})
+                continue
+            seen.add(profile_id)
+            if profile_id not in profile_ids:
+                skipped_rows.append({"row_index": row.row_index, "profile_id": profile_id, "reason": "invalid_profile"})
+                continue
+            row.mapped_profile_id = profile_id
+
+        if strict and not validation.valid:
+            raise ValueError(self._validation_error_message(validation))
+        if strict and empty_reason:
+            raise ValueError("Provider 管理范围或流程 Profile 组未命中任何 Profile")
+        batch.result_summary_json = {
+            **(batch.result_summary_json or {}),
+            "profile_mapping": validation.model_dump(mode="json"),
+            "skipped_invalid_profile": len(skipped_rows),
+            "skipped_rows": skipped_rows[:20],
+        }
+        await session.flush()
+        return validation
+
     @staticmethod
     def apply_profile_policy(
         profiles: list[ProfileRecord],
         policy: dict[str, Any],
     ) -> list[ProfileRecord]:
         selection_mode = policy.get("selection_mode", "explicit_profiles")
-        if selection_mode == "explicit_profiles" and policy.get("profile_ids"):
-            ids = {str(item) for item in policy["profile_ids"]}
-            profiles = [item for item in profiles if item.external_profile_id in ids]
-        elif selection_mode == "by_group" and policy.get("group_ids"):
-            ids = {str(item) for item in policy["group_ids"]}
-            profiles = [item for item in profiles if str(item.group_summary.get("id")) in ids]
-        elif selection_mode == "by_tag" and policy.get("tag_ids"):
-            ids = {str(item) for item in policy["tag_ids"]}
+        if selection_mode == "all_profiles":
+            return profiles
+        if selection_mode == "explicit_profiles":
+            ids = {str(item) for item in policy.get("profile_ids", [])}
+            profiles = [item for item in profiles if item.external_profile_id in ids] if ids else []
+        elif selection_mode == "by_group":
+            ids = {str(item) for item in policy.get("group_ids", [])}
+            profiles = [item for item in profiles if str(item.group_summary.get("id")) in ids] if ids else []
+        elif selection_mode == "by_tag":
+            ids = {str(item) for item in policy.get("tag_ids", [])}
             profiles = [
                 item
                 for item in profiles
                 if any(str(tag.get("id")) in ids for tag in (item.tag_summary or []))
-            ]
+            ] if ids else []
         return profiles
+
+    @staticmethod
+    def _extract_profile_id(row: dict[str, Any]) -> str | None:
+        value = row.get("profile_id")
+        if value is None:
+            return None
+        normalized = str(value).strip()
+        return normalized or None
+
+    @staticmethod
+    def _validation_error_message(validation: InputProfileMappingValidation) -> str:
+        messages: list[str] = []
+        if validation.invalid_rows:
+            reasons = {str(item.get("reason")) for item in validation.invalid_rows}
+            if "missing_profile_id_column" in reasons:
+                messages.append("Excel 必须包含固定列 profile_id")
+            if "empty_profile_id" in reasons:
+                messages.append("存在空 profile_id 行")
+        if validation.duplicate_profile_ids:
+            messages.append(f"profile_id 重复: {', '.join(validation.duplicate_profile_ids[:10])}")
+        if validation.out_of_scope_profile_ids:
+            messages.append(f"profile_id 不在流程运行 Profile 组内: {', '.join(validation.out_of_scope_profile_ids[:10])}")
+        if validation.missing_profile_ids:
+            messages.append(f"Excel 缺少流程 Profile 组内的 profile_id: {', '.join(validation.missing_profile_ids[:10])}")
+        if validation.warnings:
+            messages.extend(validation.warnings)
+        return "；".join(messages) or "Excel 与流程 Profile 映射校验失败"
 
     @staticmethod
     def _parse_input_file(file_name: str, content: bytes) -> list[dict[str, Any]]:

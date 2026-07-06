@@ -7,7 +7,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -522,13 +522,58 @@ async def import_batch(
     runtime: Annotated[RuntimeContext, Depends(get_runtime)],
     file: UploadFile = File(...),
     provider_type: str = Form(settings.provider_default_type),
+    workflow_id: str | None = Form(default=None),
 ):
     content = await file.read()
-    return await runtime.batch_service.import_batch(
-        session,
-        file_name=file.filename or "input.csv",
+    try:
+        return await runtime.batch_service.import_batch(
+            session,
+            file_name=file.filename or "input.csv",
+            content=content,
+            provider_type=provider_type,
+            workflow_id=workflow_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/input-files/validate-profile-map")
+async def validate_input_profile_map(
+    session: DbSession,
+    runtime: Annotated[RuntimeContext, Depends(get_runtime)],
+    file: UploadFile = File(...),
+    workflow_id: str = Form(...),
+    provider_type: str | None = Form(default=None),
+    strict: bool = Form(default=True),
+):
+    content = await file.read()
+    try:
+        return await runtime.batch_service.validate_profile_mapping_from_file(
+            session,
+            workflow_id=workflow_id,
+            provider_type=provider_type,
+            file_name=file.filename or "input.xlsx",
+            content=content,
+            strict=strict,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/workflows/{workflow_id}/input-template")
+async def workflow_input_template(
+    workflow_id: str,
+    session: DbSession,
+    runtime: Annotated[RuntimeContext, Depends(get_runtime)],
+):
+    try:
+        content = await runtime.batch_service.build_input_template_xlsx(session, workflow_id=workflow_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return Response(
         content=content,
-        provider_type=provider_type,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="profile_input_template.xlsx"'},
     )
 
 
@@ -568,7 +613,10 @@ async def start_batch(
     session: DbSession,
     runtime: Annotated[RuntimeContext, Depends(get_runtime)],
 ):
-    return await runtime.batch_service.start_batch(session, batch_id, payload)
+    try:
+        return await runtime.batch_service.start_batch(session, batch_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/batches/{batch_id}/pause")
@@ -613,7 +661,10 @@ async def create_schedule(
     session: DbSession,
     runtime: Annotated[RuntimeContext, Depends(get_runtime)],
 ):
-    return await runtime.schedule_service.save_schedule(session, payload, schedule_id=None)
+    try:
+        return await runtime.schedule_service.save_schedule(session, payload, schedule_id=None)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.put("/schedules/{schedule_id}")
@@ -623,7 +674,42 @@ async def update_schedule(
     session: DbSession,
     runtime: Annotated[RuntimeContext, Depends(get_runtime)],
 ):
-    return await runtime.schedule_service.save_schedule(session, payload, schedule_id=schedule_id)
+    try:
+        return await runtime.schedule_service.save_schedule(session, payload, schedule_id=schedule_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete("/schedules/{schedule_id}")
+async def delete_schedule(
+    schedule_id: str,
+    session: DbSession,
+    runtime: Annotated[RuntimeContext, Depends(get_runtime)],
+):
+    try:
+        await runtime.schedule_service.delete_schedule(session, schedule_id)
+        return {"status": "deleted"}
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/schedules/{schedule_id}/input-file")
+async def replace_schedule_input_file(
+    schedule_id: str,
+    session: DbSession,
+    runtime: Annotated[RuntimeContext, Depends(get_runtime)],
+    file: UploadFile = File(...),
+):
+    content = await file.read()
+    try:
+        return await runtime.schedule_service.save_schedule_input_file(
+            session,
+            schedule_id=schedule_id,
+            file_name=file.filename or "schedule_input.xlsx",
+            content=content,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/schedules")

@@ -26,9 +26,14 @@ class ScheduleRecordOut(BaseModel):
     status: str
     workflow_id: str
     provider_type: str
+    profile_policy_snapshot: dict[str, Any] = Field(default_factory=dict)
     schedule_type: str
     schedule_expr: str
     timezone: str
+    max_concurrency: int = 1
+    retry_once_on_failure: bool = True
+    input_source: dict[str, Any] = Field(default_factory=dict)
     next_run_at: datetime | None = None
     last_run_at: datetime | None = None
-
+    created_at: datetime | None = None
+    updated_at: datetime | None = None

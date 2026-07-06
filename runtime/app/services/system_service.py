@@ -21,6 +21,7 @@ class SystemService:
             settings.artifact_dir,
             settings.export_dir,
             settings.cache_dir,
+            settings.schedule_input_dir,
         ):
             Path(path).mkdir(parents=True, exist_ok=True)
 
@@ -47,4 +48,3 @@ class SystemService:
             providers=providers,
             diagnostics={"python_runtime": "3.12+", "storage": "sqlite"},
         )
-

@@ -194,9 +194,26 @@ export type BatchDetail = BatchSummary & {
   profile_policy_snapshot: Record<string, unknown>;
   result_summary_json: Record<string, unknown>;
   rows: Array<{
+    id?: string | null;
     row_index: number;
     dedupe_key?: string | null;
     payload: Record<string, unknown>;
+    mapped_profile_id?: string | null;
+  }>;
+  tasks: Array<{
+    id: string;
+    batch_id: string;
+    batch_row_id: string;
+    row_index?: number | null;
+    provider_type: string;
+    provider_profile_id: string;
+    status: string;
+    slot_index?: number | null;
+    error_code?: string | null;
+    error_message?: string | null;
+    outputs_json: Record<string, unknown>;
+    started_at?: string | null;
+    finished_at?: string | null;
   }>;
 };
 
@@ -207,22 +224,44 @@ export type InputFileParseResult = {
   rows: Record<string, unknown>[];
 };
 
+export type InputProfileMappingValidation = {
+  valid: boolean;
+  total_rows: number;
+  matched_count: number;
+  skipped_count: number;
+  detected_columns: string[];
+  preview_rows: Record<string, unknown>[];
+  rows: Record<string, unknown>[];
+  missing_profile_ids: string[];
+  duplicate_profile_ids: string[];
+  out_of_scope_profile_ids: string[];
+  invalid_rows: Array<Record<string, unknown>>;
+  warnings: string[];
+};
+
 export type ScheduleRecord = {
   id: string;
   name: string;
   status: string;
   workflow_id: string;
   provider_type: string;
+  profile_policy_snapshot: Record<string, unknown>;
   schedule_type: string;
   schedule_expr: string;
   timezone: string;
+  max_concurrency: number;
+  retry_once_on_failure: boolean;
+  input_source: Record<string, unknown>;
   next_run_at?: string | null;
   last_run_at?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
 };
 
 export type TaskRunDetail = {
   id: string;
   batch_id: string;
+  batch_row_id?: string | null;
   provider_type: string;
   provider_profile_id: string;
   status: string;
