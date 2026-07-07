@@ -231,11 +231,11 @@ function mappingErrorMessage(result: InputProfileMappingValidation) {
 }
 
 export function SchedulesPage() {
-  const providers = usePolling(api.listProviders, 10000);
-  const workflows = usePolling(api.listWorkflows, 10000);
+  const providers = usePolling(api.listProviders, { intervalMs: 10000, cacheKey: "providers:list" });
+  const workflows = usePolling(api.listWorkflows, { intervalMs: 10000, cacheKey: "workflows:list:all" });
   const [scheduleReloadKey, setScheduleReloadKey] = useState(0);
   const schedulesFetcher = useCallback(() => api.listSchedules(), [scheduleReloadKey]);
-  const schedules = usePolling(schedulesFetcher, 8000);
+  const schedules = usePolling(schedulesFetcher, { intervalMs: 8000, cacheKey: "schedules:list" });
   const [form] = Form.useForm();
   const [editForm] = Form.useForm();
   const scheduleType = Form.useWatch("schedule_type", form) ?? "daily";
@@ -275,8 +275,16 @@ export function SchedulesPage() {
         : Promise.resolve([]),
     [selectedWorkflowProviderType],
   );
-  const providerGroups = usePolling(groupsFetcher, 12000);
-  const providerProfiles = usePolling(profilesFetcher, 12000);
+  const providerGroups = usePolling(groupsFetcher, {
+    intervalMs: 12000,
+    cacheKey: `provider:${selectedWorkflowProviderType || "none"}:groups`,
+    enabled: Boolean(selectedWorkflowProviderType),
+  });
+  const providerProfiles = usePolling(profilesFetcher, {
+    intervalMs: 12000,
+    cacheKey: `provider:${selectedWorkflowProviderType || "none"}:profiles:managed`,
+    enabled: Boolean(selectedWorkflowProviderType),
+  });
   const selectedWorkflowGroupIds = useMemo(() => workflowRunGroupIds(selectedWorkflow), [selectedWorkflow]);
   const selectedWorkflowProfileCount = useMemo(
     () => countProfilesInGroups(providerProfiles.data, selectedWorkflowGroupIds),
@@ -552,7 +560,7 @@ export function SchedulesPage() {
   }
 
   return (
-    <Space direction="vertical" size={24} style={{ width: "100%" }}>
+    <div className="app-page schedules-page">
       <SectionCard title="轻量本机定时" subtitle="默认北京时间；选择流程、设置节奏、填写表格数据后即可生成计划。">
         <Form
           form={form}
@@ -837,6 +845,6 @@ export function SchedulesPage() {
           </Form>
         ) : null}
       </Modal>
-    </Space>
+    </div>
   );
 }

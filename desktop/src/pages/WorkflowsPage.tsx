@@ -1,7 +1,6 @@
-import Editor from "@monaco-editor/react";
-import { Alert, Button, Col, Drawer, Empty, Input, Modal, Popconfirm, Row, Select, Space, Spin, Steps, Table, Tabs, Tag, Typography, message } from "antd";
+import { Alert, Button, Col, Drawer, Empty, Input, Modal, Popconfirm, Row, Select, Space, Spin, Steps, Table, Tabs, Tag, Typography, message, type TableColumnsType } from "antd";
 import { Check, Copy, Download, FilePlus2, FolderPlus, Link2, Pencil, Trash2, Upload, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import YAML from "yaml";
 import { api } from "../api/client";
 import { SectionCard } from "../components/SectionCard";
@@ -25,6 +24,8 @@ import type {
   WorkflowFolderRecord,
   WorkflowRecord,
 } from "../types";
+
+const MonacoEditor = lazy(() => import("@monaco-editor/react"));
 
 function buildDefaultWorkflow(name = "新建运营流程", providerType = "ixbrowser") {
   return `metadata:
@@ -430,8 +431,8 @@ function buildStepPayload(
 }
 
 export function WorkflowsPage() {
-  const providers = usePolling(api.listProviders, 12000);
-  const actionCards = usePolling(api.listActionCards, 12000);
+  const providers = usePolling(api.listProviders, { intervalMs: 12000, cacheKey: "providers:list" });
+  const actionCards = usePolling(api.listActionCards, { intervalMs: 12000, cacheKey: "workflows:action-cards" });
   const [workflowReloadKey, setWorkflowReloadKey] = useState(0);
   const [folderReloadKey, setFolderReloadKey] = useState(0);
   const [workflowFolderFilter, setWorkflowFolderFilter] = useState<string | null>(null);
@@ -517,15 +518,49 @@ export function WorkflowsPage() {
     () => (profileGroupModalProviderType ? api.getProviderScope(profileGroupModalProviderType) : Promise.resolve(null)),
     [profileGroupModalProviderType, profileGroupModalReloadKey],
   );
-  const workflows = usePolling(workflowsFetcher, 12000);
-  const folders = usePolling(foldersFetcher, 12000);
-  const profiles = usePolling(profilesFetcher, 10000);
-  const groups = usePolling(groupsFetcher, 10000);
-  const providerScope = usePolling(providerScopeFetcher, 10000);
-  const openedSessions = usePolling(sessionsFetcher, 6000);
-  const profileGroupModalGroups = usePolling(profileGroupModalGroupsFetcher, 10000);
-  const profileGroupModalProfiles = usePolling(profileGroupModalProfilesFetcher, 10000);
-  const profileGroupModalScope = usePolling(profileGroupModalScopeFetcher, 10000);
+  const workflowListCacheKey = [
+    "workflows:list",
+    workflowFolderFilter ?? "all",
+    workflowProviderFilter ?? "all",
+    workflowSearch.trim() || "all",
+  ].join(":");
+  const workflows = usePolling(workflowsFetcher, { intervalMs: 12000, cacheKey: workflowListCacheKey });
+  const folders = usePolling(foldersFetcher, { intervalMs: 12000, cacheKey: "workflow-folders:list" });
+  const profiles = usePolling(profilesFetcher, {
+    intervalMs: 10000,
+    cacheKey: `provider:${selectedProviderType || "none"}:profiles:managed`,
+    enabled: Boolean(selectedProviderType),
+  });
+  const groups = usePolling(groupsFetcher, {
+    intervalMs: 10000,
+    cacheKey: `provider:${selectedProviderType || "none"}:groups`,
+    enabled: Boolean(selectedProviderType),
+  });
+  const providerScope = usePolling(providerScopeFetcher, {
+    intervalMs: 10000,
+    cacheKey: `provider:${selectedProviderType || "none"}:scope`,
+    enabled: Boolean(selectedProviderType),
+  });
+  const openedSessions = usePolling(sessionsFetcher, {
+    intervalMs: 6000,
+    cacheKey: `provider:${selectedProviderType || "none"}:sessions`,
+    enabled: Boolean(selectedProviderType),
+  });
+  const profileGroupModalGroups = usePolling(profileGroupModalGroupsFetcher, {
+    intervalMs: 10000,
+    cacheKey: `provider:${profileGroupModalProviderType || "none"}:groups`,
+    enabled: Boolean(profileGroupModalProviderType),
+  });
+  const profileGroupModalProfiles = usePolling(profileGroupModalProfilesFetcher, {
+    intervalMs: 10000,
+    cacheKey: `provider:${profileGroupModalProviderType || "none"}:profiles:managed`,
+    enabled: Boolean(profileGroupModalProviderType),
+  });
+  const profileGroupModalScope = usePolling(profileGroupModalScopeFetcher, {
+    intervalMs: 10000,
+    cacheKey: `provider:${profileGroupModalProviderType || "none"}:scope`,
+    enabled: Boolean(profileGroupModalProviderType),
+  });
 
   useEffect(() => {
     if (!selectedProviderType && providers.data?.length) {
@@ -1504,6 +1539,139 @@ export function WorkflowsPage() {
   const activeProviderLabel =
     providerOptions.find((option) => option.value === selectedProviderType)?.label ?? selectedProviderType;
   const canExportCurrentWorkflow = Boolean(activeWorkflow || creatingWorkflow);
+  const workflowTableColumns: TableColumnsType<WorkflowRecord> = [
+      {
+        title: "流程名称",
+        dataIndex: "name",
+        key: "name",
+        width: 340,
+        render: (_, item) => (
+          <div className="workflow-table-name">
+            {renamingWorkflowId === item.id ? (
+              <Space.Compact style={{ width: "100%" }}>
+                <Input
+                  size="small"
+                  value={renamingWorkflowValue}
+                  onChange={(event) => setRenamingWorkflowValue(event.target.value)}
+                  onPressEnter={() => void handleRenameWorkflow(item)}
+                />
+                <Button
+                  size="small"
+                  type="primary"
+                  icon={<Check size={13} />}
+                  loading={workflowActionLoadingId === item.id}
+                  onClick={() => void handleRenameWorkflow(item)}
+                />
+                <Button size="small" icon={<X size={13} />} onClick={cancelRenameWorkflow} />
+              </Space.Compact>
+            ) : (
+              <>
+                <div className="workflow-table-name__row">
+                  <Button type="link" className="workflow-table-name__link" onClick={() => handleSelectWorkflow(item)}>
+                    {item.name}
+                  </Button>
+                  <Button
+                    size="small"
+                    type="text"
+                    icon={<Pencil size={13} />}
+                    onClick={() => startRenameWorkflow(item)}
+                  />
+                </div>
+                {item.description ? (
+                  <Typography.Text className="workflow-table-description" type="secondary">
+                    {item.description}
+                  </Typography.Text>
+                ) : null}
+              </>
+            )}
+          </div>
+        ),
+      },
+      {
+        title: "流程分组",
+        dataIndex: "folder",
+        key: "folder",
+        width: 180,
+        render: (_, item) => (
+          <Select
+            size="small"
+            showSearch
+            optionFilterProp="label"
+            style={{ width: "100%" }}
+            value={item.folder || "未分组"}
+            options={folderOptions}
+            loading={workflowActionLoadingId === item.id}
+            onChange={(value) => void handleMoveWorkflowFolder(item, value)}
+          />
+        ),
+      },
+      {
+        title: "Provider",
+        dataIndex: "target_provider_type",
+        key: "provider",
+        width: 120,
+        render: (value: string) => (
+          <Tag>
+            {providerOptions.find((option) => option.value === value)?.label ?? value}
+          </Tag>
+        ),
+      },
+      {
+        title: "Profile 组状态",
+        key: "profile_groups",
+        width: 260,
+        render: (_, item) => {
+          const bindingStatus = workflowProfileBindingStatus(item);
+          return (
+            <Space direction="vertical" size={2} className="workflow-table-profile">
+              <Tag color={bindingStatus.color}>{bindingStatus.label}</Tag>
+              <Typography.Text type="secondary">{bindingStatus.detail}</Typography.Text>
+            </Space>
+          );
+        },
+      },
+      {
+        title: "类型",
+        dataIndex: "is_builtin",
+        key: "type",
+        width: 90,
+        render: (value: boolean) => <Tag>{value ? "内置" : "自定义"}</Tag>,
+      },
+      {
+        title: "操作",
+        key: "actions",
+        width: 360,
+        fixed: "right",
+        render: (_, item) => (
+          <Space className="workflow-table-actions" size={[6, 6]} wrap>
+            <Button size="small" type="primary" onClick={() => handleSelectWorkflow(item)}>
+              编排
+            </Button>
+            <Button size="small" icon={<Link2 size={14} />} onClick={() => handleOpenProfileGroupModal(item)}>
+              Profile 组
+            </Button>
+            <Button size="small" icon={<Download size={14} />} onClick={() => handleExportWorkflow(item)}>
+              导出
+            </Button>
+            <Button size="small" icon={<Copy size={14} />} onClick={() => void handleDuplicateWorkflow(item)}>
+              复制
+            </Button>
+            <Popconfirm
+              title="删除这个流程？"
+              description="如果流程已被历史批次或定时任务引用，系统会阻止删除。"
+              okText="删除"
+              cancelText="取消"
+              okButtonProps={{ danger: true }}
+              onConfirm={() => void handleDeleteWorkflow(item)}
+            >
+              <Button size="small" danger icon={<Trash2 size={14} />}>
+                删除
+              </Button>
+            </Popconfirm>
+          </Space>
+        ),
+      },
+    ];
   const testSessionPanel = (
     <Space direction="vertical" size={14} style={{ width: "100%" }}>
       <div className="workflow-panel-heading">
@@ -1513,7 +1681,7 @@ export function WorkflowsPage() {
             {selectedSession ? "已连接测试窗口" : "选择窗口并打开"}
           </Typography.Title>
         </div>
-        <Tag color={selectedSession ? "green" : "default"}>{selectedSession ? "已就绪" : "未连接"}</Tag>
+        <Tag>{selectedSession ? "已就绪" : "未连接"}</Tag>
       </div>
       <Alert
         type={selectedSession ? "success" : "info"}
@@ -1582,23 +1750,12 @@ export function WorkflowsPage() {
           关闭测试 Profile
         </Button>
       </Space>
-      <Popconfirm
-        title="整条流程试运行？"
-        description="会在当前打开的测试 Profile 中按顺序真实执行全部节点。"
-        okText="开始试运行"
-        cancelText="取消"
-        onConfirm={() => void handleDryRunWorkflow()}
-      >
-        <Button block size="large" type="primary" loading={dryRunLoading} disabled={!selectedSession}>
-          整条流程试运行
-        </Button>
-      </Popconfirm>
       <Space wrap>
-        <Tag color={selectedGroup ? "geekblue" : "default"}>
+        <Tag>
           {selectedGroup ? selectedGroup.display_name : "全部分组"}
         </Tag>
-        <Tag color="cyan">Profiles {filteredProfiles.length}</Tag>
-        <Tag color="gold">会话 {(openedSessions.data ?? []).length}</Tag>
+        <Tag>Profiles {filteredProfiles.length}</Tag>
+        <Tag>会话 {(openedSessions.data ?? []).length}</Tag>
       </Space>
     </Space>
   );
@@ -1608,7 +1765,7 @@ export function WorkflowsPage() {
   }
 
   return (
-    <Space direction="vertical" size={22} style={{ width: "100%" }}>
+    <div className="app-page workflows-page">
       <input
         ref={importInputRef}
         type="file"
@@ -1624,7 +1781,6 @@ export function WorkflowsPage() {
 
       <SectionCard
         title="流程工作台"
-        subtitle="按流程分组管理 SOP，选中流程后直接进入下方编排画布。"
         extra={
           <Space wrap>
             <Button
@@ -1644,7 +1800,7 @@ export function WorkflowsPage() {
           <aside className="workflow-group-rail">
             <div className="workflow-panel-heading">
               <Typography.Text className="section-eyebrow">流程分组</Typography.Text>
-              <Tag color="blue">{folderRecords.length}</Tag>
+              <Tag>{folderRecords.length}</Tag>
             </div>
             <button
               type="button"
@@ -1755,128 +1911,39 @@ export function WorkflowsPage() {
                   onChange={(event) => setWorkflowSearch(event.target.value)}
                 />
               </Space>
-              <Tag color={creatingWorkflow ? "gold" : activeWorkflow ? "green" : "default"}>
+              <Tag>
                 {creatingWorkflow ? "新流程草稿" : activeWorkflow ? `正在编辑 ${activeWorkflow.name}` : "未选择流程"}
               </Tag>
             </div>
-            <div className="workflow-record-list">
-              {(workflows.data ?? []).length ? (
-                (workflows.data ?? []).map((item) => {
-                  const bindingStatus = workflowProfileBindingStatus(item);
-                  return (
-                  <div
-                    className={`workflow-record-card${activeWorkflow?.id === item.id ? " is-active" : ""}${bindingStatus.usable ? "" : " is-unusable"}`}
-                    key={item.id}
-                    onDoubleClick={() => handleSelectWorkflow(item)}
-                  >
-                    <div className="workflow-record-main">
-                      {renamingWorkflowId === item.id ? (
-                        <Space.Compact style={{ width: "100%" }}>
-                          <Input
-                            size="small"
-                            value={renamingWorkflowValue}
-                            onChange={(event) => setRenamingWorkflowValue(event.target.value)}
-                            onPressEnter={() => void handleRenameWorkflow(item)}
-                          />
-                          <Button
-                            size="small"
-                            type="primary"
-                            icon={<Check size={13} />}
-                            loading={workflowActionLoadingId === item.id}
-                            onClick={() => void handleRenameWorkflow(item)}
-                          />
-                          <Button size="small" icon={<X size={13} />} onClick={cancelRenameWorkflow} />
-                        </Space.Compact>
-                      ) : (
-                        <>
-                          <div className="workflow-record-title-row">
-                            <Typography.Text className="workflow-record-title" strong>
-                              {item.name}
-                            </Typography.Text>
-                            <Button
-                              size="small"
-                              type="text"
-                              icon={<Pencil size={13} />}
-                              onClick={() => startRenameWorkflow(item)}
-                            />
-                          </div>
-                          <Typography.Text className="workflow-record-desc" type="secondary">
-                            {item.description || "无描述"}
-                          </Typography.Text>
-                        </>
-                      )}
-                    </div>
-                    <div className="workflow-record-meta">
-                      <div className="workflow-record-field workflow-record-field--group">
-                        <span>流程分组</span>
-                        <Select
-                          size="small"
-                          showSearch
-                          optionFilterProp="label"
-                          style={{ width: "100%" }}
-                          value={item.folder || "未分组"}
-                          options={folderOptions}
-                          loading={workflowActionLoadingId === item.id}
-                          onChange={(value) => void handleMoveWorkflowFolder(item, value)}
-                        />
-                      </div>
-                      <div className="workflow-record-field">
-                        <span>Provider</span>
-                        <strong>{item.target_provider_type}</strong>
-                      </div>
-                      <div className="workflow-record-field">
-                        <span>Profile 组</span>
-                        <Space size={4} wrap>
-                          <Tag color={bindingStatus.color}>{bindingStatus.label}</Tag>
-                          <Typography.Text className="workflow-record-profile-detail" type="secondary">
-                            {bindingStatus.detail}
-                          </Typography.Text>
-                        </Space>
-                      </div>
-                    </div>
-                    <Space className="workflow-record-actions" size={[6, 6]} wrap>
-                      <Button size="small" type="primary" onClick={() => handleSelectWorkflow(item)}>
-                        编排
-                      </Button>
-                      <Button size="small" icon={<Link2 size={14} />} onClick={() => handleOpenProfileGroupModal(item)}>
-                        关联 Profile 组
-                      </Button>
-                      <Button size="small" icon={<Download size={14} />} onClick={() => handleExportWorkflow(item)}>
-                        导出
-                      </Button>
-                      <Button size="small" icon={<Copy size={14} />} onClick={() => void handleDuplicateWorkflow(item)}>
-                        复制
-                      </Button>
-                      <Popconfirm
-                        title="删除这个流程？"
-                        description="如果流程已被历史批次或定时任务引用，系统会阻止删除。"
-                        okText="删除"
-                        cancelText="取消"
-                        okButtonProps={{ danger: true }}
-                        onConfirm={() => void handleDeleteWorkflow(item)}
-                      >
-                        <Button size="small" danger icon={<Trash2 size={14} />}>
-                          删除
-                        </Button>
-                      </Popconfirm>
-                    </Space>
-                  </div>
-                  );
-                })
-              ) : (
-                <Empty description="当前筛选下没有流程" />
-              )}
-            </div>
+            <Table<WorkflowRecord>
+              className="workflow-record-table"
+              rowKey="id"
+              size="small"
+              dataSource={workflows.data ?? []}
+              columns={workflowTableColumns}
+              locale={{ emptyText: <Empty description="当前筛选下没有流程" /> }}
+              pagination={false}
+              scroll={{ x: 1350, y: "100%" }}
+              rowClassName={(item) => {
+                const bindingStatus = workflowProfileBindingStatus(item);
+                return [
+                  "workflow-table-row",
+                  activeWorkflow?.id === item.id ? "is-active" : "",
+                  bindingStatus.usable ? "" : "is-unusable",
+                ].filter(Boolean).join(" ");
+              }}
+              onRow={(item) => ({
+                onDoubleClick: () => handleSelectWorkflow(item),
+              })}
+            />
           </main>
         </div>
       </SectionCard>
 
       <SectionCard
         title="流程编排工作台"
-        subtitle="固定画布内完成动作添加、步骤调整、测试会话和整条试运行。"
         extra={
           <Space wrap>
-            <Typography.Text type="secondary">流程分组</Typography.Text>
             <Select
               showSearch
               optionFilterProp="label"
@@ -1905,37 +1972,8 @@ export function WorkflowsPage() {
         }
       >
         <Space direction="vertical" size={14} style={{ width: "100%" }}>
-          <div className="workflow-compose-banner">
-            <div>
-              <Typography.Text className="section-eyebrow">正在编排</Typography.Text>
-              <Typography.Title level={4}>{activeWorkflowName}</Typography.Title>
-              <Space wrap>
-                <Tag color={creatingWorkflow ? "gold" : activeWorkflow ? "green" : "default"}>
-                  {creatingWorkflow ? "未保存草稿" : activeWorkflow ? "已保存流程" : "未选择流程"}
-                </Tag>
-                <Tag color="blue">{activeFolder}</Tag>
-                <Tag color="cyan">{activeProviderLabel}</Tag>
-                <Tag color={runGroupIds.length ? "green" : "red"}>
-                  运行 Profile {runProfileCount}
-                </Tag>
-                <Tag color={selectedSession ? "green" : "default"}>
-                  {selectedSession ? "测试窗口已连接" : "未连接测试窗口"}
-                </Tag>
-              </Space>
-            </div>
-            <Popconfirm
-              title="整条流程试运行？"
-              description="会在当前打开的测试 Profile 中按顺序真实执行全部节点。"
-              okText="开始试运行"
-              cancelText="取消"
-              onConfirm={() => void handleDryRunWorkflow()}
-            >
-              <Button type="primary" size="large" loading={dryRunLoading} disabled={!selectedSession}>
-                整条流程试运行
-              </Button>
-            </Popconfirm>
-          </div>
           <Tabs
+            className="workflow-editor-tabs"
             items={[
               {
                 key: "operator",
@@ -1945,6 +1983,35 @@ export function WorkflowsPage() {
                     cards={actionCards.data ?? []}
                     steps={draftSteps}
                     locators={draftLocators}
+                    workflowName={activeWorkflowName}
+                    canvasMeta={
+                      <Space size={[6, 4]} wrap>
+                        <Tag>
+                          {creatingWorkflow ? "未保存草稿" : activeWorkflow ? "已保存流程" : "未选择流程"}
+                        </Tag>
+                        <Tag>{activeFolder}</Tag>
+                        <Tag>{activeProviderLabel}</Tag>
+                        <Tag color={runGroupIds.length ? "green" : "red"}>
+                          运行 Profile {runProfileCount}
+                        </Tag>
+                        <Tag>
+                          {selectedSession ? "测试窗口已连接" : "未连接测试窗口"}
+                        </Tag>
+                      </Space>
+                    }
+                    canvasActions={
+                      <Popconfirm
+                        title="全流程测试？"
+                        description="会在当前打开的测试 Profile 中按顺序真实执行全部节点。"
+                        okText="开始测试"
+                        cancelText="取消"
+                        onConfirm={() => void handleDryRunWorkflow()}
+                      >
+                        <Button type="primary" loading={dryRunLoading} disabled={!selectedSession}>
+                          全流程测试
+                        </Button>
+                      </Popconfirm>
+                    }
                     testPanel={testSessionPanel}
                     onSelectCard={openStepComposer}
                     onEditStep={handleEditStep}
@@ -1958,15 +2025,17 @@ export function WorkflowsPage() {
                 key: "advanced",
                 label: "高级 YAML",
                 children: (
-                  <Row gutter={[20, 20]}>
+                  <Row gutter={[20, 20]} className="workflow-advanced-layout">
                     <Col xs={24} xl={17}>
-                      <Editor
-                        height="680px"
-                        defaultLanguage="yaml"
-                        value={yamlValue}
-                        onChange={(value) => setYamlValue(value ?? "")}
-                        options={{ minimap: { enabled: false }, fontSize: 14 }}
-                      />
+                      <Suspense fallback={<Spin />}>
+                        <MonacoEditor
+                          height="100%"
+                          defaultLanguage="yaml"
+                          value={yamlValue}
+                          onChange={(value) => setYamlValue(value ?? "")}
+                          options={{ minimap: { enabled: false }, fontSize: 14 }}
+                        />
+                      </Suspense>
                     </Col>
                     <Col xs={24} xl={7}>
                       <SectionCard title="高级工具">
@@ -2075,8 +2144,8 @@ export function WorkflowsPage() {
               <Typography.Text className="section-eyebrow">即将创建草稿</Typography.Text>
               <Typography.Title level={4}>{newWorkflowName || "未命名流程"}</Typography.Title>
               <Space wrap>
-                <Tag color="blue">{newWorkflowFolder || "未分组"}</Tag>
-                <Tag color="cyan">{newWorkflowProviderType}</Tag>
+                <Tag>{newWorkflowFolder || "未分组"}</Tag>
+                <Tag>{newWorkflowProviderType}</Tag>
               </Space>
             </div>
           ) : null}
@@ -2134,7 +2203,7 @@ export function WorkflowsPage() {
             />
           </div>
           <Space wrap>
-            <Tag color={profileGroupDraftIds.length ? "blue" : "red"}>
+            <Tag color={profileGroupDraftIds.length ? "default" : "red"}>
               已选 {profileGroupDraftIds.length} 组
             </Tag>
             <Tag color={modalProfileCount > 0 ? "green" : "red"}>
@@ -2176,9 +2245,9 @@ export function WorkflowsPage() {
               <Tag color={dryRunResult.success ? "green" : "red"}>
                 {dryRunResult.success ? "全部通过" : "存在失败"}
               </Tag>
-              <Tag color="blue">成功 {dryRunResult.succeeded_steps}</Tag>
+              <Tag>成功 {dryRunResult.succeeded_steps}</Tag>
               <Tag color="red">失败 {dryRunResult.failed_steps}</Tag>
-              <Tag color="gold">耗时 {dryRunResult.elapsed_ms}ms</Tag>
+              <Tag>耗时 {dryRunResult.elapsed_ms}ms</Tag>
             </Space>
             <Table
               rowKey="step_id"
@@ -2279,6 +2348,6 @@ export function WorkflowsPage() {
         onPreviewStep={handlePreviewStep}
         onSubmit={handleStepConfigured}
       />
-    </Space>
+    </div>
   );
 }

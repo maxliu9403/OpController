@@ -88,6 +88,75 @@ function toQuery(params: Record<string, string | boolean | null | undefined>) {
   return value ? `?${value}` : "";
 }
 
+async function httpErrorMessage(response: Response): Promise<string> {
+  const contentType = response.headers.get("content-type") ?? "";
+  const rawText = await response.text();
+  if (!rawText.trim()) {
+    return `请求失败：HTTP ${response.status}`;
+  }
+  if (contentType.includes("application/json")) {
+    try {
+      return formatRuntimeError(JSON.parse(rawText));
+    } catch {
+      return cleanupRuntimeMessage(rawText);
+    }
+  }
+  try {
+    return formatRuntimeError(JSON.parse(rawText));
+  } catch {
+    return cleanupRuntimeMessage(rawText);
+  }
+}
+
+function formatRuntimeError(payload: unknown): string {
+  if (typeof payload === "string") {
+    return cleanupRuntimeMessage(payload);
+  }
+  if (!payload || typeof payload !== "object") {
+    return "请求失败，请稍后重试。";
+  }
+  const record = payload as Record<string, unknown>;
+  const detail = record.detail ?? record.message ?? record.error;
+  if (Array.isArray(detail)) {
+    return cleanupRuntimeMessage(
+      detail
+        .map((item) => {
+          if (typeof item === "string") {
+            return item;
+          }
+          if (item && typeof item === "object") {
+            const itemRecord = item as Record<string, unknown>;
+            return String(itemRecord.msg ?? itemRecord.message ?? JSON.stringify(itemRecord));
+          }
+          return String(item);
+        })
+        .join("；"),
+    );
+  }
+  if (detail && typeof detail === "object") {
+    const detailRecord = detail as Record<string, unknown>;
+    return cleanupRuntimeMessage(String(detailRecord.message ?? detailRecord.msg ?? JSON.stringify(detailRecord)));
+  }
+  if (detail !== undefined && detail !== null) {
+    return cleanupRuntimeMessage(String(detail));
+  }
+  return cleanupRuntimeMessage(JSON.stringify(record));
+}
+
+function cleanupRuntimeMessage(message: string): string {
+  const normalized = message.trim().replace(/\s+/g, " ");
+  const providerNotReadyMatch = normalized.match(/^(.+?)\s*未就绪[:：].*?(本地 API 无法连接|Local API unreachable)/i);
+  if (providerNotReadyMatch) {
+    const providerName = providerNotReadyMatch[1].trim();
+    return `${providerName} 未就绪：请先启动 ${providerName}，并确认本地 API 端口配置正确后重试。`;
+  }
+  return normalized
+    .replace(/Local API unreachable/gi, "本地 API 无法连接")
+    .replace(/Local API reachable/gi, "本地 API 可访问")
+    .replace(/HTTPConnectionPool/gi, "HTTP 连接池")
+    .replace(/Connection refused/gi, "连接被拒绝");
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const method = init?.method?.toUpperCase() ?? "GET";
   const shouldSendJsonHeader = method !== "GET" && method !== "HEAD" && !(init?.body instanceof FormData);
@@ -104,7 +173,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
         },
       });
       if (!response.ok) {
-        throw new Error(await response.text());
+        throw new Error(await httpErrorMessage(response));
       }
       return response.json() as Promise<T>;
     } catch (cause) {
@@ -126,7 +195,7 @@ async function requestBlob(path: string, init?: RequestInit): Promise<Blob> {
     },
   });
   if (!response.ok) {
-    throw new Error(await response.text());
+    throw new Error(await httpErrorMessage(response));
   }
   return response.blob();
 }

@@ -8,7 +8,8 @@
   "scripts": {
     "dev:desktop": "npm --workspace desktop run dev",
     "build:desktop": "npm --workspace desktop run build",
+    "build:mac:internal": "npm --workspace desktop run build:mac && bash scripts/package-mac-internal.sh",
+    "build:win": "npm --workspace desktop run build:win",
     "tauri:dev": "npm --workspace desktop run tauri:dev"
   }
 }
-

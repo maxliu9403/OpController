@@ -8,9 +8,9 @@ import { usePolling } from "../hooks/usePolling";
 import { statusColor, statusLabel } from "../utils/status";
 
 export function DashboardPage() {
-  const system = usePolling(api.systemCheck, 15000);
-  const batches = usePolling(api.listBatches, 7000);
-  const schedules = usePolling(api.listSchedules, 12000);
+  const system = usePolling(api.systemCheck, { intervalMs: 15000, cacheKey: "system:check" });
+  const batches = usePolling(api.listBatches, { intervalMs: 7000, cacheKey: "batches:list" });
+  const schedules = usePolling(api.listSchedules, { intervalMs: 12000, cacheKey: "schedules:list" });
 
   const activeProviders = useMemo(
     () => system.data?.providers.filter((item) => item.health.healthy).length ?? 0,

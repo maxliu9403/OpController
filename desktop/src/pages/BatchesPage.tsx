@@ -1,4 +1,5 @@
 import { Alert, Button, Form, InputNumber, Modal, Select, Space, Spin, Table, Tag, Typography, Upload, message } from "antd";
+import type { UploadProps } from "antd";
 import { Download, UploadCloud } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
@@ -57,15 +58,15 @@ function groupSummaryLabel(groups: ProviderGroupRecord[] | null | undefined, gro
 }
 
 export function BatchesPage() {
-  const providers = usePolling(api.listProviders, 12000);
-  const workflows = usePolling(api.listWorkflows, 12000);
+  const providers = usePolling(api.listProviders, { intervalMs: 12000, cacheKey: "providers:list" });
+  const workflows = usePolling(api.listWorkflows, { intervalMs: 12000, cacheKey: "workflows:list:all" });
   const [batchReloadKey, setBatchReloadKey] = useState(0);
   const batchesFetcher = useCallback(() => api.listBatches(), [batchReloadKey]);
-  const batches = usePolling(batchesFetcher, 7000);
+  const batches = usePolling(batchesFetcher, { intervalMs: 7000, cacheKey: "batches:list" });
   const [uploading, setUploading] = useState(false);
   const [batchActionLoadingId, setBatchActionLoadingId] = useState<string | null>(null);
   const [selectedBatchId, setSelectedBatchId] = useState<string | null>(null);
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [importedFileName, setImportedFileName] = useState("");
   const [form] = Form.useForm();
 
   const providerOptions = useMemo(
@@ -94,8 +95,16 @@ export function BatchesPage() {
         : Promise.resolve([]),
     [selectedWorkflowProviderType],
   );
-  const providerGroups = usePolling(groupsFetcher, 12000);
-  const providerProfiles = usePolling(profilesFetcher, 12000);
+  const providerGroups = usePolling(groupsFetcher, {
+    intervalMs: 12000,
+    cacheKey: `provider:${selectedWorkflowProviderType || "none"}:groups`,
+    enabled: Boolean(selectedWorkflowProviderType),
+  });
+  const providerProfiles = usePolling(profilesFetcher, {
+    intervalMs: 12000,
+    cacheKey: `provider:${selectedWorkflowProviderType || "none"}:profiles:managed`,
+    enabled: Boolean(selectedWorkflowProviderType),
+  });
   const selectedWorkflowGroupIds = useMemo(() => workflowRunGroupIds(selectedWorkflow), [selectedWorkflow]);
   const selectedWorkflowProfileCount = useMemo(
     () => countProfilesInGroups(providerProfiles.data, selectedWorkflowGroupIds),
@@ -118,16 +127,7 @@ export function BatchesPage() {
     }
   }, [form, selectedWorkflow]);
 
-  const importProps = {
-    maxCount: 1,
-    beforeUpload: () => false,
-    showUploadList: true,
-    onChange: (info: { fileList: Array<{ originFileObj?: File }> }) => {
-      setSelectedFile(info.fileList[0]?.originFileObj ?? null);
-    },
-  };
-
-  const handleUpload = useCallback(async (file?: File) => {
+  const handleUpload = useCallback(async (file: File) => {
     if (!file) {
       message.warning("先选择一个 CSV 或 Excel 文件");
       return;
@@ -144,6 +144,7 @@ export function BatchesPage() {
       }
       const result = await api.importBatch(file, providerType, workflowId);
       setSelectedBatchId(result.batch.id);
+      setImportedFileName(file.name);
       setBatchReloadKey((value) => value + 1);
       message.success(`已导入 ${result.batch.total_rows} 行数据`);
     } catch (cause) {
@@ -152,6 +153,16 @@ export function BatchesPage() {
       setUploading(false);
     }
   }, [form]);
+
+  const importProps: UploadProps = {
+    maxCount: 1,
+    beforeUpload: (file) => {
+      void handleUpload(file);
+      return false;
+    },
+    showUploadList: false,
+    disabled: uploading,
+  };
 
   const handleStart = async () => {
     if (!selectedBatchId) {
@@ -329,8 +340,13 @@ export function BatchesPage() {
             <Form.Item label="批量文件">
               <Space direction="vertical" size={6}>
                 <Upload {...importProps}>
-                  <Button icon={<UploadCloud size={16} />}>选择 CSV / Excel</Button>
+                  <Button icon={<UploadCloud size={16} />} loading={uploading}>
+                    选择并导入 CSV / Excel
+                  </Button>
                 </Upload>
+                {importedFileName ? (
+                  <Typography.Text type="secondary">{importedFileName}</Typography.Text>
+                ) : null}
                 <Button
                   type="text"
                   size="small"
@@ -345,13 +361,6 @@ export function BatchesPage() {
           </Space>
         </Form>
         <Space>
-          <Button
-            type="default"
-            loading={uploading}
-            onClick={() => void handleUpload(selectedFile ?? undefined)}
-          >
-            导入草稿批次
-          </Button>
           <Button type="primary" onClick={() => void handleStart()}>
             启动批次
           </Button>

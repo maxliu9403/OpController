@@ -84,8 +84,8 @@ function buildTaskRows(batch: BatchDetail | null) {
 }
 
 export function ResultsPage() {
-  const batches = usePolling(api.listBatches, 7000);
-  const workflows = usePolling(api.listWorkflows, 12000);
+  const batches = usePolling(api.listBatches, { intervalMs: 7000, cacheKey: "batches:list" });
+  const workflows = usePolling(api.listWorkflows, { intervalMs: 12000, cacheKey: "workflows:list:all" });
   const [selectedBatchId, setSelectedBatchId] = useState<string | null>(null);
   const [batchResultFilter, setBatchResultFilter] = useState<BatchResultFilter>("all");
   const [workflowQuery, setWorkflowQuery] = useState("");
@@ -119,7 +119,11 @@ export function ResultsPage() {
     () => (effectiveBatchId ? api.getResultBatch(effectiveBatchId) : Promise.resolve(null)),
     [effectiveBatchId],
   );
-  const batchDetail = usePolling(batchDetailFetcher, 7000);
+  const batchDetail = usePolling(batchDetailFetcher, {
+    intervalMs: 7000,
+    cacheKey: effectiveBatchId ? `results:batch:${effectiveBatchId}` : "results:batch:none",
+    enabled: Boolean(effectiveBatchId),
+  });
   const selectedBatch = useMemo(
     () => filteredBatches.find((item) => item.id === effectiveBatchId) ?? null,
     [effectiveBatchId, filteredBatches],
@@ -162,7 +166,7 @@ export function ResultsPage() {
   }
 
   return (
-    <Space direction="vertical" size={18} style={{ width: "100%" }}>
+    <div className="app-page results-page">
       <SectionCard
         title="批次结果看板"
         subtitle="按流程、结果状态和输入行状态快速定位失败原因。"
@@ -279,7 +283,7 @@ export function ResultsPage() {
                 size="small"
                 dataSource={filteredTaskRows}
                 pagination={false}
-                scroll={{ x: 960, y: 560 }}
+                scroll={{ x: 960 }}
                 expandable={{
                   expandedRowRender: (item) => (
                     <div className="results-row-detail">
@@ -343,6 +347,6 @@ export function ResultsPage() {
           </div>
         </SectionCard>
       </div>
-    </Space>
+    </div>
   );
 }

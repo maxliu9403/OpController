@@ -1,5 +1,22 @@
 import { Button, Dropdown, Empty, Popconfirm, Space, Tag, Tooltip, Typography } from "antd";
-import { ArrowDown, ArrowUp, Copy, Pencil, Plus, Trash2 } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  Camera,
+  Clock3,
+  Copy,
+  Download,
+  FileText,
+  Globe2,
+  ListTree,
+  MousePointerClick,
+  Pencil,
+  Plus,
+  ScrollText,
+  Trash2,
+  Type,
+  UploadCloud,
+} from "lucide-react";
 import type { ReactNode } from "react";
 import type { WorkflowActionCard } from "../types";
 
@@ -30,6 +47,9 @@ type WorkflowWizardProps = {
   cards: WorkflowActionCard[];
   steps: WorkflowDraftStep[];
   locators: Record<string, Record<string, unknown>>;
+  workflowName?: string;
+  canvasMeta?: ReactNode;
+  canvasActions?: ReactNode;
   onSelectCard: (card: WorkflowActionCard, options?: { insertAfterIndex?: number }) => void;
   onEditStep: (index: number) => void;
   onDeleteStep: (index: number) => void;
@@ -79,11 +99,23 @@ function stepSummary(step: WorkflowDraftStep, locator?: Record<string, unknown> 
     const direction = step.scroll_direction === "up" ? "向上" : "向下";
     return `${direction}慢速拟人化滚动 ${step.scroll_distance ?? step.value ?? 320}px，重复 ${step.scroll_repeat ?? 4} 次，间隔 ${step.scroll_pause_ms ?? 1200}ms`;
   }
-  if (step.selector_key) {
-    if (step.type === "click" && step.click_target_mode === "random_many") {
-      return `定位键: ${step.selector_key} / 随机点击 ${step.random_click_count ?? 1} 个匹配元素`;
+  if (step.type === "click") {
+    if (step.click_target_mode === "random_many") {
+      return `随机点击 ${step.random_click_count ?? 1} 个匹配目标`;
     }
-    return `定位键: ${step.selector_key}`;
+    return "点击已选页面元素";
+  }
+  if (step.type === "fill") {
+    return `输入内容: ${String(step.value ?? "${row.xxx}")}`;
+  }
+  if (step.type === "select") {
+    return `选择下拉项: ${String(step.value ?? "${row.xxx}")}`;
+  }
+  if (step.type === "extract_text") {
+    return `提取文本${step.save_as ? `到 ${step.save_as}` : ""}`;
+  }
+  if (step.type === "for_each") {
+    return "循环列表或表格中的多行数据";
   }
   if (typeof step.value === "string" && step.value) {
     return `参数: ${step.value}`;
@@ -94,10 +126,54 @@ function stepSummary(step: WorkflowDraftStep, locator?: Record<string, unknown> 
   return "等待补充元素定位和参数";
 }
 
+function actionVisual(type: string, options?: { hasUrl?: boolean }) {
+  if (type === "click") {
+    return { icon: <MousePointerClick size={16} />, label: "点击", tone: "action" };
+  }
+  if (type === "fill") {
+    return { icon: <Type size={16} />, label: "输入", tone: "input" };
+  }
+  if (type === "select") {
+    return { icon: <ListTree size={16} />, label: "选择", tone: "input" };
+  }
+  if (type === "wait" || type === "sleep") {
+    return { icon: <Clock3 size={16} />, label: "等待", tone: "wait" };
+  }
+  if (type === "scroll") {
+    return { icon: <ScrollText size={16} />, label: "滚动", tone: "navigate" };
+  }
+  if (type.includes("open") || options?.hasUrl) {
+    return { icon: <Globe2 size={16} />, label: "打开", tone: "navigate" };
+  }
+  if (type.includes("download")) {
+    return { icon: <Download size={16} />, label: "下载", tone: "file" };
+  }
+  if (type.includes("upload")) {
+    return { icon: <UploadCloud size={16} />, label: "上传", tone: "file" };
+  }
+  if (type === "screenshot") {
+    return { icon: <Camera size={16} />, label: "截图", tone: "file" };
+  }
+  if (type === "extract_text") {
+    return { icon: <FileText size={16} />, label: "提取", tone: "data" };
+  }
+  if (type === "for_each") {
+    return { icon: <ListTree size={16} />, label: "循环", tone: "data" };
+  }
+  return { icon: <FileText size={16} />, label: type, tone: "neutral" };
+}
+
+function stepVisual(step: WorkflowDraftStep) {
+  return actionVisual(step.type, { hasUrl: Boolean(step.url) });
+}
+
 export function WorkflowWizard({
   cards,
   steps,
   locators,
+  workflowName,
+  canvasMeta,
+  canvasActions,
   onSelectCard,
   onEditStep,
   onDeleteStep,
@@ -113,39 +189,52 @@ export function WorkflowWizard({
           <Typography.Text type="secondary">{cards.length} 个动作</Typography.Text>
         </div>
         <div className="workflow-action-list">
-          {cards.map((card) => (
-            <button
-              className="workflow-action-tile"
-              key={card.type}
-              type="button"
-              onClick={() => onSelectCard(card)}
-            >
-              <span>
-                <Tag bordered={false} color="gold">
-                  {card.category}
-                </Tag>
-                <strong>{card.label}</strong>
-              </span>
-              <small>{card.description}</small>
-            </button>
-          ))}
+          {cards.map((card) => {
+            const visual = actionVisual(card.type);
+            return (
+              <button
+                className="workflow-action-tile"
+                key={card.type}
+                type="button"
+                onClick={() => onSelectCard(card)}
+              >
+                <span className="workflow-action-tile__head">
+                  <span className={`workflow-action-icon workflow-step-node--${visual.tone}`}>
+                    {visual.icon}
+                  </span>
+                  <span className="workflow-action-tile__title">
+                    <Tag bordered={false} className={`workflow-step-type workflow-step-type--${visual.tone}`}>
+                      {visual.label}
+                    </Tag>
+                    <strong>{card.label}</strong>
+                  </span>
+                </span>
+                <small>{card.description}</small>
+              </button>
+            );
+          })}
         </div>
       </aside>
 
       <main className="workflow-canvas__flow">
-        <div className="workflow-panel-heading">
-          <div>
-            <Typography.Text className="section-eyebrow">流程画布</Typography.Text>
-            <Typography.Title level={5} style={{ margin: 0 }}>
-              已编排 {steps.length} 个步骤
+        <div className="workflow-panel-heading workflow-canvas-heading">
+          <div className="workflow-canvas-heading__main">
+            <Typography.Text className="section-eyebrow">流程画布 · {steps.length} 步</Typography.Text>
+            <Typography.Title level={5} className="workflow-canvas-heading__title">
+              {workflowName || "未选择流程"}
             </Typography.Title>
+            {canvasMeta ? <div className="workflow-canvas-heading__meta">{canvasMeta}</div> : null}
           </div>
-          <Tag color={steps.length ? "green" : "default"}>{steps.length ? "可编辑" : "空流程"}</Tag>
+          <Space size={8} wrap className="workflow-canvas-heading__actions">
+            {canvasActions}
+            <Tag>{steps.length ? "可编辑" : "空流程"}</Tag>
+          </Space>
         </div>
         <div className="workflow-step-scroll">
           {steps.length ? (
             steps.map((step, index) => {
               const locator = step.selector_key ? locators[step.selector_key] : null;
+              const visual = stepVisual(step);
               const insertMenuItems = cards.map((card) => ({
                 key: card.type,
                 label: `${card.label} · ${card.category}`,
@@ -153,11 +242,16 @@ export function WorkflowWizard({
               }));
               return (
                 <div key={step.id} className="workflow-step-item">
-                  <div className="workflow-step-node">{index + 1}</div>
+                  <div className={`workflow-step-node workflow-step-node--${visual.tone}`}>
+                    {visual.icon}
+                  </div>
                   <div className="workflow-step-item__body">
                     <div className="workflow-step-item__title-row">
-                      <Space wrap>
-                        <Tag color="gold">{step.type}</Tag>
+                      <Space wrap className="workflow-step-item__headline">
+                        <Tag className={`workflow-step-type workflow-step-type--${visual.tone}`}>{visual.label}</Tag>
+                        <Typography.Text type="secondary" className="workflow-step-index">
+                          #{index + 1}
+                        </Typography.Text>
                         <Typography.Title level={5} style={{ margin: 0 }}>
                           {step.label || step.id}
                         </Typography.Title>
@@ -212,11 +306,6 @@ export function WorkflowWizard({
                     <Typography.Paragraph type="secondary" style={{ marginBottom: 6 }}>
                       {stepSummary(step, locator)}
                     </Typography.Paragraph>
-                    {locator ? (
-                      <Typography.Text type="secondary">
-                        主规则: {String(locator.primary_selector ?? "--")} / 稳定性 {String(locator.stability_score ?? "--")}
-                      </Typography.Text>
-                    ) : null}
                     <div className="workflow-step-item__insert-row">
                       <Dropdown trigger={["click"]} menu={{ items: insertMenuItems }} disabled={!cards.length}>
                         <Button

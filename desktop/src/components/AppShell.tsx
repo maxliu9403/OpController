@@ -10,10 +10,13 @@ import {
   ScanSearch,
   Sun,
 } from "lucide-react";
+import { useEffect } from "react";
 import { Link, Outlet, useLocation } from "react-router-dom";
+import { api } from "../api/client";
+import { primePollingCache } from "../hooks/usePolling";
 import { useThemeMode } from "../themeMode";
 
-const { Header, Content, Sider } = Layout;
+const { Content, Sider } = Layout;
 
 const items = [
   { key: "/", label: <Link to="/">概览</Link>, icon: <LayoutDashboard size={16} /> },
@@ -25,6 +28,19 @@ const items = [
   { key: "/results", label: <Link to="/results">结果</Link>, icon: <ScanSearch size={16} /> },
 ];
 
+function AppLogo() {
+  return (
+    <div className="app-logo-mark" aria-hidden="true">
+      <svg viewBox="0 0 36 36" role="img">
+        <rect x="4" y="4" width="28" height="28" rx="9" />
+        <path d="M12 18c0-4 2.7-7 6.2-7 3.4 0 5.9 2.6 5.9 6.1v.5h-4.8" />
+        <path d="M24 18c0 4-2.7 7-6.2 7-3.4 0-5.9-2.6-5.9-6.1v-.5h4.8" />
+        <circle cx="18" cy="18" r="2.2" />
+      </svg>
+    </div>
+  );
+}
+
 export function AppShell() {
   const location = useLocation();
   const { mode, setMode } = useThemeMode();
@@ -32,29 +48,69 @@ export function AppShell() {
     items.find((item) => item.key !== "/" && location.pathname.startsWith(item.key))?.key ??
     (location.pathname === "/" ? "/" : location.pathname);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    const warmCommonData = async () => {
+      try {
+        const providersPromise = primePollingCache("providers:list", api.listProviders);
+        void primePollingCache("system:check", api.systemCheck).catch(() => undefined);
+        void primePollingCache("workflows:list:all", api.listWorkflows).catch(() => undefined);
+        void primePollingCache("workflows:action-cards", api.listActionCards).catch(() => undefined);
+        void primePollingCache("workflow-folders:list", api.listWorkflowFolders).catch(() => undefined);
+        void primePollingCache("batches:list", api.listBatches).catch(() => undefined);
+        void primePollingCache("schedules:list", api.listSchedules).catch(() => undefined);
+
+        const providers = await providersPromise;
+        if (cancelled) {
+          return;
+        }
+        const providerType = providers[0]?.provider_type;
+        if (!providerType) {
+          return;
+        }
+        void primePollingCache(`provider:${providerType}:groups`, () => api.listProviderGroups(providerType)).catch(() => undefined);
+        void primePollingCache(`provider:${providerType}:profiles:managed`, () => api.listProfiles(providerType, { managed_only: true })).catch(() => undefined);
+        void primePollingCache(`provider:${providerType}:profiles:all`, () => api.listProfiles(providerType)).catch(() => undefined);
+        void primePollingCache(`provider:${providerType}:scope`, () => api.getProviderScope(providerType)).catch(() => undefined);
+        void primePollingCache(`provider:${providerType}:sessions`, () => api.listProviderSessions(providerType)).catch(() => undefined);
+      } catch {
+        // 页面本身仍会按需加载；预热失败不影响正常使用。
+      }
+    };
+
+    void warmCommonData();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   return (
     <Layout className="app-layout">
       <Sider width={280} className="app-sider">
         <div className="brand-panel">
-          <Typography.Text className="brand-kicker">OpController</Typography.Text>
-          <Typography.Title level={2}>运营控制台</Typography.Title>
+          <div className="brand-lockup">
+            <AppLogo />
+            <div>
+              <Typography.Text className="brand-kicker">OpController</Typography.Text>
+              <Typography.Title level={2}>运营控制台</Typography.Title>
+            </div>
+            <Button
+              className="theme-switch brand-theme-switch"
+              size="large"
+              shape="circle"
+              aria-label={mode === "light" ? "switch to dark theme" : "switch to light theme"}
+              icon={mode === "light" ? <Moon size={17} /> : <Sun size={17} />}
+              onClick={() => setMode(mode === "light" ? "dark" : "light")}
+            />
+          </div>
           <Typography.Paragraph>
-            面向内部平台的多浏览器编排、可视群控与批次复盘工作台。
+            多浏览器编排、可视群控与批次复盘工作台。
           </Typography.Paragraph>
         </div>
         <Menu theme={mode === "dark" ? "dark" : "light"} mode="inline" selectedKeys={[selectedKey]} items={items} />
       </Sider>
       <Layout>
-        <Header className="app-header">
-          <Button
-            className="theme-switch"
-            size="large"
-            shape="circle"
-            aria-label={mode === "light" ? "switch to dark theme" : "switch to light theme"}
-            icon={mode === "light" ? <Moon size={18} /> : <Sun size={18} />}
-            onClick={() => setMode(mode === "light" ? "dark" : "light")}
-          />
-        </Header>
         <Content className="app-content">
           <Outlet />
         </Content>

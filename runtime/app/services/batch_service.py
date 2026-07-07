@@ -45,6 +45,7 @@ from app.schemas.workflow import WorkflowDefinition
 from app.services.execution_service import ExecutionService
 from app.services.monitor_service import MonitorService
 from app.services.provider_service import ProviderService
+from app.services.resilience import DynamicSlotController
 from app.services.workflow_service import WorkflowService
 
 
@@ -56,6 +57,13 @@ class BatchControl:
 
     def __post_init__(self) -> None:
         self.paused.set()
+
+
+class ProviderNotReadyError(ValueError):
+    def __init__(self, provider_type: str, message: str, details: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.provider_type = provider_type
+        self.details = details or {}
 
 
 class BatchService:
@@ -356,6 +364,7 @@ class BatchService:
             raise ValueError("批次正在运行或等待运行，不能重复启动")
         if batch.status == BatchStatus.COMPLETED:
             raise ValueError("已完成批次不需要重试")
+        await self._ensure_provider_ready_for_run(request.provider_type, batch_id=batch.id)
         if batch.status in {BatchStatus.FAILED, BatchStatus.CANCELLED}:
             await self._clear_batch_runs(session, batch.id)
             batch.success_count = 0
@@ -382,6 +391,67 @@ class BatchService:
         task = asyncio.create_task(self._run_batch(batch.id, request.requested_slots, control))
         self._active_jobs[batch.id] = task
         return await self.get_batch_detail(session, batch.id)
+
+    async def _ensure_provider_ready_for_run(self, provider_type: str, *, batch_id: str | None = None) -> None:
+        try:
+            provider = self.registry.get(provider_type)
+        except KeyError as exc:
+            raise ValueError(f"未知指纹浏览器 Provider：{provider_type}") from exc
+
+        try:
+            health = await asyncio.wait_for(provider.health_check(), timeout=settings.provider_health_timeout_sec)
+        except TimeoutError as exc:
+            message = (
+                f"{provider.display_name} 健康检查超过 {settings.provider_health_timeout_sec:.0f} 秒，"
+                "请确认指纹浏览器已启动且 Local API 可访问"
+            )
+            details = {"timeout": True}
+            await self._publish_provider_health_failed(batch_id, provider_type, message, details)
+            raise ProviderNotReadyError(provider_type, message, details) from exc
+        except Exception as exc:  # noqa: BLE001
+            message = f"{provider.display_name} 健康检查失败：{exc}"
+            details = {"error": str(exc)}
+            await self._publish_provider_health_failed(batch_id, provider_type, message, details)
+            raise ProviderNotReadyError(provider_type, message, details) from exc
+
+        if not health.healthy:
+            message = (
+                f"{provider.display_name} 未就绪：{health.message}。"
+                "请先启动对应指纹浏览器，并确认本地 API 端口配置正确后重试"
+            )
+            details = health.model_dump(mode="json")
+            await self._publish_provider_health_failed(batch_id, provider_type, message, details)
+            raise ProviderNotReadyError(provider_type, message, details)
+
+        if self.monitor:
+            await self.monitor.publish(
+                "provider.health_ok",
+                {
+                    "batch_id": batch_id,
+                    "provider_type": provider_type,
+                    "message": health.message,
+                    "api_base": health.api_base,
+                },
+            )
+
+    async def _publish_provider_health_failed(
+        self,
+        batch_id: str | None,
+        provider_type: str,
+        message: str,
+        details: dict[str, Any],
+    ) -> None:
+        if not self.monitor:
+            return
+        await self.monitor.publish(
+            "provider.health_failed",
+            {
+                "batch_id": batch_id,
+                "provider_type": provider_type,
+                "message": message,
+                "details": details,
+            },
+        )
 
     async def _clear_batch_runs(self, session: AsyncSession, batch_id: str) -> None:
         task_result = await session.execute(select(TaskRunRecord.id).where(TaskRunRecord.batch_id == batch_id))
@@ -512,6 +582,7 @@ class BatchService:
             screen_bounds = await self._read_screen_bounds()
             screen_capacity = self._estimate_visual_slot_capacity(screen_bounds)
             slot_limit = max(1, min(requested_slots, settings.max_slot_limit, screen_capacity, len(executable_rows)))
+            slot_controller = self._build_slot_controller(slot_limit)
             if control.cancelled:
                 batch.status = BatchStatus.CANCELLED
                 await session.commit()
@@ -533,6 +604,13 @@ class BatchService:
             await session.commit()
 
         provider = self.registry.get(batch.provider_type)
+        await self.monitor.publish(
+            "batch.slot_policy",
+            {
+                "batch_id": batch_id,
+                **slot_controller.snapshot(reason="initialized"),
+            },
+        )
         task_queue: asyncio.Queue[str] = asyncio.Queue()
         for task in tasks:
             task_queue.put_nowait(task.id)
@@ -580,6 +658,9 @@ class BatchService:
                 await control.paused.wait()
                 if control.cancelled:
                     return
+                allowed = await slot_controller.wait_for_slot(slot_index, lambda: control.cancelled)
+                if not allowed:
+                    return
                 try:
                     task_run_id = task_queue.get_nowait()
                 except asyncio.QueueEmpty:
@@ -602,9 +683,11 @@ class BatchService:
                         on_session_opened=on_session_opened,
                         on_session_closed=on_session_closed,
                     )
+                    await self._record_slot_outcome(batch_id, task_run_id, slot_controller)
                     await self.monitor.publish("batch.progress", {"batch_id": batch_id, "task_run_id": task_run_id})
                 except Exception as exc:  # noqa: BLE001
                     await self._mark_task_worker_failed(task_run_id, exc)
+                    await self._record_slot_outcome(batch_id, task_run_id, slot_controller)
                 finally:
                     task_queue.task_done()
 
@@ -623,6 +706,48 @@ class BatchService:
             control.worker_tasks.clear()
             self._active_jobs.pop(batch_id, None)
             self._controls.pop(batch_id, None)
+
+    def _build_slot_controller(self, slot_limit: int) -> DynamicSlotController:
+        target_slots = max(1, slot_limit)
+        if settings.dynamic_slots_enabled:
+            initial_slots = min(target_slots, max(1, settings.dynamic_slots_initial_limit))
+        else:
+            initial_slots = target_slots
+        return DynamicSlotController(
+            target_slots=target_slots,
+            initial_slots=initial_slots,
+            min_slots=min(target_slots, max(1, settings.dynamic_slots_min_limit)),
+            failure_rate_threshold=settings.dynamic_slots_failure_rate_threshold,
+            window_size=settings.dynamic_slots_window_size,
+            recovery_success_streak=settings.dynamic_slots_recovery_success_streak,
+            poll_interval_sec=settings.dynamic_slots_poll_interval_sec,
+        )
+
+    async def _record_slot_outcome(
+        self,
+        batch_id: str,
+        task_run_id: str,
+        slot_controller: DynamicSlotController,
+    ) -> None:
+        async with self.session_factory() as session:
+            task = await session.get(TaskRunRecord, task_run_id)
+            if not task:
+                return
+            if task.status == TaskRunStatus.SUCCEEDED:
+                snapshot = slot_controller.record_success()
+            elif task.status == TaskRunStatus.FAILED:
+                snapshot = slot_controller.record_failure(code=task.error_code, message=task.error_message)
+            else:
+                snapshot = None
+        if snapshot:
+            await self.monitor.publish(
+                "batch.slot_adjusted",
+                {
+                    "batch_id": batch_id,
+                    "task_run_id": task_run_id,
+                    **snapshot,
+                },
+            )
 
     async def _assign_task_slot(self, task_run_id: str, slot_index: int) -> None:
         async with self.session_factory() as session:

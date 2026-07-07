@@ -60,11 +60,11 @@ export default function App() {
         theme={{
           algorithm: isLight ? theme.defaultAlgorithm : theme.darkAlgorithm,
           token: {
-            colorPrimary: "#f4a300",
-            borderRadius: 18,
-            colorBgBase: isLight ? "#f8f3ea" : "#101114",
-            colorTextBase: isLight ? "#221a10" : "#f6f1e8",
-            fontFamily: "'Avenir Next', 'IBM Plex Sans', 'PingFang SC', sans-serif",
+            colorPrimary: isLight ? "#007aff" : "#0a84ff",
+            borderRadius: 14,
+            colorBgBase: isLight ? "#f5f5f7" : "#1c1c1e",
+            colorTextBase: isLight ? "#1d1d1f" : "#f5f5f7",
+            fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Avenir Next', 'PingFang SC', sans-serif",
           },
         }}
       >

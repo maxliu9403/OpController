@@ -111,6 +111,7 @@ class SlowProvider(BrowserProvider):
 @pytest.mark.asyncio
 async def test_open_provider_session_timeout_becomes_execution_error(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "provider_open_timeout_sec", 0.01)
+    monkeypatch.setattr(settings, "profile_open_retry_attempts", 1)
 
     with pytest.raises(ExecutionError, match="打开 Profile 101 超过"):
         await ExecutionService(session_factory=None, monitor=None)._open_provider_session(SlowProvider(), "101")

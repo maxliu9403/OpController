@@ -54,7 +54,7 @@ function dedupe(values: string[]) {
 }
 
 export function ProvidersPage() {
-  const providers = usePolling(api.listProviders, 10000);
+  const providers = usePolling(api.listProviders, { intervalMs: 10000, cacheKey: "providers:list" });
   const [selectedProviderType, setSelectedProviderType] = useState("ixbrowser");
   const [profileReloadKey, setProfileReloadKey] = useState(0);
   const [scopeReloadKey, setScopeReloadKey] = useState(0);
@@ -78,9 +78,21 @@ export function ProvidersPage() {
     () => api.getProviderScope(selectedProviderType),
     [selectedProviderType, scopeReloadKey],
   );
-  const groups = usePolling(groupsFetcher, 10000);
-  const profiles = usePolling(profilesFetcher, 10000);
-  const scope = usePolling(scopeFetcher, 10000);
+  const groups = usePolling(groupsFetcher, {
+    intervalMs: 10000,
+    cacheKey: `provider:${selectedProviderType}:groups`,
+    enabled: Boolean(selectedProviderType),
+  });
+  const profiles = usePolling(profilesFetcher, {
+    intervalMs: 10000,
+    cacheKey: `provider:${selectedProviderType}:profiles:all`,
+    enabled: Boolean(selectedProviderType),
+  });
+  const scope = usePolling(scopeFetcher, {
+    intervalMs: 10000,
+    cacheKey: `provider:${selectedProviderType}:scope`,
+    enabled: Boolean(selectedProviderType),
+  });
 
   useEffect(() => {
     if (!providers.data?.length) {

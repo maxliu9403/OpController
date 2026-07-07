@@ -164,6 +164,32 @@ Tauri 壳会按以下优先级查找并启动 runtime：
 
 ## 构建与打包
 
+### 打包命令速查
+
+日常只验证前端构建：
+
+```bash
+npm run build:desktop
+```
+
+macOS 本机内部测试包，推荐给运营或测试同事使用：
+
+```bash
+npm run build:mac:internal
+```
+
+macOS Tauri 默认包，仅用于本机开发验证或作为正式签名公证前的原始产物：
+
+```bash
+npm --workspace desktop run build:mac
+```
+
+Windows 安装包必须在 Windows 环境或 GitHub Actions 的 Windows runner 中构建：
+
+```powershell
+npm run build:win
+```
+
 ### 仅构建前端
 
 ```bash
@@ -206,6 +232,8 @@ runtime/dist/opcontroller-runtime/opcontroller-runtime.exe
 
 ### 构建 macOS App
 
+普通 Tauri 构建：
+
 ```bash
 npm --workspace desktop run build:mac
 ```
@@ -217,11 +245,58 @@ desktop/src-tauri/target/release/bundle/macos/OpController.app
 desktop/src-tauri/target/release/bundle/dmg/OpController_0.1.0_aarch64.dmg
 ```
 
+内部测试分发建议使用下面的命令。它会先执行完整 macOS 构建，再对 `.app` 做 ad-hoc 深度签名，并重新生成一个内部 DMG，避免 Tauri 默认产物在部分 Mac 上出现资源封签不完整导致的“文件已损坏”提示：
+
+```bash
+npm run build:mac:internal
+```
+
+预期输出：
+
+```text
+desktop/src-tauri/target/release/bundle/macos/OpController.app
+desktop/src-tauri/target/release/bundle/dmg/OpController_0.1.0_aarch64_internal.dmg
+```
+
+当前推荐发送给 MacBook Air M3 或其他 Apple Silicon 测试机的是：
+
+```text
+desktop/src-tauri/target/release/bundle/dmg/OpController_0.1.0_aarch64_internal.dmg
+```
+
+如果把未公证的内部测试包通过微信、网盘、浏览器下载等方式发送到另一台 Mac，macOS 可能会因为 Gatekeeper 隔离属性提示“文件已损坏”。这通常不是 DMG 真损坏，而是未使用 Apple Developer ID 签名和公证。内部测试机可以在安装后执行：
+
+```bash
+xattr -dr com.apple.quarantine /Applications/OpController.app
+```
+
+测试机安装步骤建议：
+
+1. 打开 `OpController_0.1.0_aarch64_internal.dmg`。
+2. 将 `OpController.app` 拖入 `/Applications`。
+3. 如果首次打开提示“文件已损坏”或无法验证开发者，在终端执行：
+
+```bash
+xattr -dr com.apple.quarantine /Applications/OpController.app
+```
+
+4. 再次从 `/Applications` 打开 `OpController.app`。
+
+如果只是把 `.app` 放在当前机器本地运行，也可以直接打开：
+
+```text
+desktop/src-tauri/target/release/bundle/macos/OpController.app
+```
+
+正式对外分发需要使用 Apple Developer ID 证书签名、开启 hardened runtime、提交 Apple notarization，并 stapler 到 DMG。内部 ad-hoc 签名包不能替代正式公证包。
+
 如果需要构建 Intel macOS 版本，建议在 x64 Mac 上构建，或额外配置 Rust target、签名和打包链路。
 
 ### 构建 Windows App
 
-在 Windows 上执行：
+Windows 包必须在 Windows 环境构建。原因是本项目包含 Python sidecar，PyInstaller 只能为当前操作系统生成可执行文件；在 macOS 上不能直接产出可运行的 Windows runtime。
+
+在 Windows 上首次准备环境：
 
 ```powershell
 npm install
@@ -231,11 +306,12 @@ py -3.12 -m venv .venv
 pip install -e ".[dev]"
 python -m playwright install chromium
 cd ..
-npm --workspace desktop run build
-cd runtime
-.\.venv\Scripts\pyinstaller.exe packaging\opcontroller-runtime.spec --noconfirm
-cd ..
-npm --workspace desktop exec tauri build
+```
+
+之后一键构建：
+
+```powershell
+npm run build:win
 ```
 
 输出目录：
@@ -244,7 +320,14 @@ npm --workspace desktop exec tauri build
 desktop/src-tauri/target/release/bundle/
 ```
 
-具体安装包类型取决于 Tauri bundle 配置和 Windows 本机工具链。
+常见输出包括：
+
+```text
+desktop/src-tauri/target/release/bundle/nsis/*.exe
+desktop/src-tauri/target/release/bundle/msi/*.msi
+```
+
+也可以在 GitHub Actions 中手动触发 `Build Windows` workflow，完成后从 Artifact 下载 `OpController-windows-x64`。
 
 ## 环境变量
 
@@ -378,6 +461,29 @@ curl http://127.0.0.1:18519/local/v1/health
 ```text
 ~/Library/Application Support/com.max.opcontroller/runtime/logs/
 ```
+
+如果 macOS 一直停留在“正在启动本地 Runtime”，说明 Tauri 桌面壳已经打开，但内置 Python sidecar 没有完成启动。常见原因包括：
+
+- 直接在 DMG 只读挂载盘里启动 App。
+- App 没有拖入 `/Applications`，或仍带有 macOS quarantine 隔离属性。
+- `18519` 端口被其他进程占用。
+- 内置 runtime 子进程启动后立刻退出。
+
+建议先将 App 拖入 `/Applications`，再执行：
+
+```bash
+xattr -dr com.apple.quarantine /Applications/OpController.app
+```
+
+重点查看这些日志：
+
+```text
+desktop-bootstrap.log
+runtime-stdout.log
+runtime-stderr.log
+```
+
+新版启动页会在超时后直接展示 runtime 地址、日志目录、子进程状态和 `runtime-stderr.log` 尾部，便于定位跨机器启动问题。
 
 ### 18519 端口被占用
 

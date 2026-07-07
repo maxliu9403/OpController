@@ -1,0 +1,60 @@
+name: Build Windows
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "desktop/**"
+      - "runtime/**"
+      - "shared/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/windows-build.yml"
+
+jobs:
+  windows:
+    name: Windows x64
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      - name: Install Python runtime dependencies
+        shell: pwsh
+        run: |
+          py -3.12 -m venv runtime\.venv
+          runtime\.venv\Scripts\python.exe -m pip install --upgrade pip
+          runtime\.venv\Scripts\python.exe -m pip install -e "runtime[dev]"
+          runtime\.venv\Scripts\python.exe -m playwright install chromium
+
+      - name: Build Windows desktop bundles
+        run: npm run build:win
+
+      - name: Upload Windows bundles
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpController-windows-x64
+          if-no-files-found: error
+          path: |
+            desktop/src-tauri/target/release/bundle/**/*.msi
+            desktop/src-tauri/target/release/bundle/**/*.exe

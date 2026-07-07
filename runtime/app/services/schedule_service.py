@@ -15,7 +15,7 @@ from app.models import BatchRecord, BatchRowRecord, BatchStatus, ScheduleRecord,
 from app.schemas.batch import StartBatchRequest
 from app.schemas.schedule import ScheduleDefinition, ScheduleRecordOut
 from app.config import settings
-from app.services.batch_service import BatchService
+from app.services.batch_service import BatchService, ProviderNotReadyError
 from app.services.monitor_service import MonitorService
 
 
@@ -216,13 +216,63 @@ class ScheduleService:
                     runtime_mode="visual",
                     requested_slots=schedule.max_concurrency,
                 )
-                await self.batch_service.start_batch(session, batch.id, start_request)
+                try:
+                    await self.batch_service.start_batch(session, batch.id, start_request)
+                except ProviderNotReadyError as exc:
+                    await self._mark_schedule_batch_start_failed(
+                        session,
+                        schedule=schedule,
+                        batch=batch,
+                        error_code="provider_health_check_failed",
+                        message=str(exc),
+                        details=exc.details,
+                    )
+                    return
+                except ValueError as exc:
+                    await self._mark_schedule_batch_start_failed(
+                        session,
+                        schedule=schedule,
+                        batch=batch,
+                        error_code="batch_start_failed",
+                        message=str(exc),
+                        details={},
+                    )
+                    return
                 self._active_schedule_batches[schedule.id] = batch.id
                 schedule.last_run_at = datetime.utcnow()
                 await session.commit()
                 await self.monitor.publish("schedule.triggered", {"schedule_id": schedule.id, "batch_id": batch.id})
         finally:
             self._running_schedule_ids.discard(schedule_id)
+
+    async def _mark_schedule_batch_start_failed(
+        self,
+        session: AsyncSession,
+        *,
+        schedule: ScheduleRecord,
+        batch: BatchRecord,
+        error_code: str,
+        message: str,
+        details: dict[str, Any],
+    ) -> None:
+        batch.status = BatchStatus.FAILED
+        batch.result_summary_json = {
+            "error": message,
+            "error_code": error_code,
+            "details": details,
+        }
+        schedule.last_run_at = datetime.utcnow()
+        await session.commit()
+        await self.monitor.publish(
+            "schedule.failed",
+            {
+                "schedule_id": schedule.id,
+                "batch_id": batch.id,
+                "error_code": error_code,
+                "message": message,
+                "details": details,
+            },
+        )
 
     async def _create_batch_from_schedule(
         self,

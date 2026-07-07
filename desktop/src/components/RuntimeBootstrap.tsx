@@ -12,11 +12,43 @@ function describeBootstrapError(cause: unknown) {
   return "本地 Runtime 启动失败";
 }
 
+type RuntimeBootStatus = {
+  origin: string;
+  boot_error?: string | null;
+  child_status?: string | null;
+  log_dir: string;
+  desktop_log_tail: string;
+  stdout_log_tail: string;
+  stderr_log_tail: string;
+};
+
+async function getRuntimeBootStatus() {
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<RuntimeBootStatus>("runtime_boot_status");
+  } catch {
+    return null;
+  }
+}
+
+function buildDiagnosticMessage(status: RuntimeBootStatus | null) {
+  if (!status) {
+    return "";
+  }
+  return [
+    status.boot_error ? `启动错误：${status.boot_error}` : "",
+    status.child_status ? `进程状态：${status.child_status}` : "",
+    `Runtime 地址：${status.origin}`,
+    `日志目录：${status.log_dir}`,
+  ].filter(Boolean).join("\n");
+}
+
 export function RuntimeBootstrap({ children }: PropsWithChildren) {
   const [ready, setReady] = useState(false);
   const [timedOut, setTimedOut] = useState(false);
   const [attempts, setAttempts] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [bootStatus, setBootStatus] = useState<RuntimeBootStatus | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -38,9 +70,14 @@ export function RuntimeBootstrap({ children }: PropsWithChildren) {
         if (cancelled) {
           return;
         }
+        const status = await getRuntimeBootStatus();
+        if (!cancelled && status) {
+          setBootStatus(status);
+        }
         const nextError = describeBootstrapError(cause);
         const reachedTimeout = Date.now() - startedAt >= STARTUP_TIMEOUT_MS;
-        setError(nextError);
+        const diagnosticMessage = buildDiagnosticMessage(status);
+        setError(diagnosticMessage ? `${nextError}\n${diagnosticMessage}` : nextError);
         setTimedOut(reachedTimeout);
         if (!reachedTimeout) {
           timer = window.setTimeout(() => void probe(), RETRY_INTERVAL_MS);
@@ -71,6 +108,9 @@ export function RuntimeBootstrap({ children }: PropsWithChildren) {
             桌面程序正在拉起本地执行引擎并检查指纹浏览器接入状态。首次启动通常需要几秒钟。
           </Typography.Paragraph>
           <Typography.Text type="secondary">探活次数：{attempts}</Typography.Text>
+          {attempts >= 6 && bootStatus?.child_status ? (
+            <Typography.Text type="secondary">{bootStatus.child_status}</Typography.Text>
+          ) : null}
         </Space>
       </div>
     );
@@ -83,9 +123,18 @@ export function RuntimeBootstrap({ children }: PropsWithChildren) {
         title="本地 Runtime 未能在预期时间内就绪"
         subTitle={error ?? "请确认桌面程序已完成 sidecar 启动，然后重试。"}
         extra={
-          <Button type="primary" onClick={() => window.location.reload()}>
-            重新检测
-          </Button>
+          <Space direction="vertical" size={12} style={{ width: "100%", maxWidth: 760 }}>
+            {bootStatus?.stderr_log_tail ? (
+              <Typography.Paragraph style={{ textAlign: "left", whiteSpace: "pre-wrap" }}>
+                <Typography.Text strong>Runtime 错误日志：</Typography.Text>
+                {"\n"}
+                {bootStatus.stderr_log_tail}
+              </Typography.Paragraph>
+            ) : null}
+            <Button type="primary" onClick={() => window.location.reload()}>
+              重新检测
+            </Button>
+          </Space>
         }
       />
     </div>

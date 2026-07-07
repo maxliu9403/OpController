@@ -4,6 +4,8 @@ from typing import Callable
 
 import pytest
 
+from app.config import settings
+from app.schemas.provider import ProviderSessionRef
 from app.schemas.workflow import LocatorSpec, WorkflowDefinition, WorkflowStep
 from app.services.execution_service import ExecutionContext, ExecutionError, ExecutionService
 
@@ -120,6 +122,43 @@ class DuplicateScope:
         return DuplicateLocator(self.signatures if selector == self.selector else [])
 
 
+class FlakyOpenProvider:
+    provider_type = "fake"
+
+    def __init__(self) -> None:
+        self.open_calls = 0
+        self.close_calls = 0
+        self.reset_calls = 0
+
+    async def open_profile(self, external_profile_id: str) -> ProviderSessionRef:
+        self.open_calls += 1
+        if self.open_calls == 1:
+            raise RuntimeError("profile_open_failed: provider busy")
+        return ProviderSessionRef(
+            provider_type=self.provider_type,
+            provider_profile_id=external_profile_id,
+            ws_endpoint="ws://ok",
+        )
+
+    async def close_profile(self, external_profile_id: str) -> None:
+        self.close_calls += 1
+
+    async def reset_open_state(self, external_profile_id: str) -> None:
+        self.reset_calls += 1
+
+
+class FlakyGotoPage:
+    def __init__(self) -> None:
+        self.goto_calls = 0
+        self.url = "about:blank"
+
+    async def goto(self, url: str, *, wait_until: str, timeout: int) -> None:
+        self.goto_calls += 1
+        if self.goto_calls == 1:
+            raise RuntimeError("net::ERR_SOCKS_CONNECTION_FAILED")
+        self.url = url
+
+
 @pytest.fixture(autouse=True)
 def no_human_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
     async def no_sleep(duration: float) -> None:
@@ -170,6 +209,53 @@ async def test_click_random_many_allows_ambiguous_locator(monkeypatch: pytest.Mo
     assert clicked == [2, 4, 0]
     assert context.variables["last_random_click"]["matched_count"] == 5
     assert context.variables["last_random_click"]["clicked_count"] == 3
+
+
+@pytest.mark.asyncio
+async def test_open_provider_session_retries_recoverable_open_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "profile_open_retry_attempts", 2)
+
+    async def no_sleep(delay: float) -> None:
+        return None
+
+    monkeypatch.setattr("app.services.resilience.asyncio.sleep", no_sleep)
+    provider = FlakyOpenProvider()
+
+    session = await ExecutionService(session_factory=None, monitor=None)._open_provider_session(provider, "101")
+
+    assert session.ws_endpoint == "ws://ok"
+    assert provider.open_calls == 2
+    assert provider.close_calls == 1
+    assert provider.reset_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_goto_retries_transient_network_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "navigation_retry_attempts", 2)
+
+    async def no_sleep(delay: float) -> None:
+        return None
+
+    monkeypatch.setattr("app.services.resilience.asyncio.sleep", no_sleep)
+    page = FlakyGotoPage()
+    service = ExecutionService(session_factory=None, monitor=None)
+
+    async def stable(page, *, timeout_ms: int):
+        return {"load": True, "networkidle": True, "page_stable": True}
+
+    monkeypatch.setattr(service, "_wait_after_goto_stability", stable)
+
+    result = await service._goto_with_retry(
+        page,
+        url="https://example.test",
+        timeout_ms=1000,
+        task_run_id="preview",
+    )
+
+    assert page.goto_calls == 2
+    assert page.url == "https://example.test"
+    assert result["attempts"] == 2
+    assert result["retry_categories"] == ["transient_network"]
 
 
 @pytest.mark.asyncio

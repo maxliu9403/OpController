@@ -19,6 +19,7 @@ from app.schemas.provider import ProviderSessionRef
 from app.schemas.preview import LocatorLivePreviewResult, StepLivePreviewResult, WorkflowDryRunResult, WorkflowDryRunStepResult
 from app.schemas.workflow import LocatorSpec, WorkflowDefinition, WorkflowStep
 from app.services.monitor_service import MonitorService
+from app.services.resilience import RetryDecision, RetryPlanner, RetryPolicy, RetryScope
 
 
 class ExecutionError(RuntimeError):
@@ -61,6 +62,7 @@ class ExecutionService:
         self.session_factory = session_factory
         self.monitor = monitor
         self.provider_service = provider_service
+        self.retry_planner = RetryPlanner()
 
     async def execute_task(
         self,
@@ -89,7 +91,7 @@ class ExecutionService:
 
             row_payload = await self._load_row_payload(session, task.batch_row_id)
         try:
-            session_ref = await self._open_provider_session(provider, provider_profile_id)
+            session_ref = await self._open_provider_session(provider, provider_profile_id, task_run_id=task_run_id)
             debug_endpoint = session_ref.ws_endpoint or session_ref.debugging_address
             if not debug_endpoint:
                 raise ExecutionError(
@@ -116,16 +118,11 @@ class ExecutionService:
             if on_session_opened:
                 await on_session_opened(task_run_id, session_ref)
 
-            try:
-                browser, page, playwright = await asyncio.wait_for(
-                    self._attach_browser(debug_endpoint),
-                    timeout=settings.browser_attach_timeout_sec,
-                )
-            except TimeoutError as exc:
-                raise ExecutionError(
-                    "browser_attach_timeout",
-                    f"附着浏览器调试端点超过 {settings.browser_attach_timeout_sec:.0f} 秒",
-                ) from exc
+            browser, page, playwright = await self._attach_browser_with_retry(
+                debug_endpoint,
+                task_run_id=task_run_id,
+                provider_profile_id=provider_profile_id,
+            )
 
             context = ExecutionContext(
                 page=page,
@@ -209,27 +206,128 @@ class ExecutionService:
         self,
         provider: BrowserProvider,
         provider_profile_id: str | None,
+        *,
+        task_run_id: str | None = None,
     ) -> ProviderSessionRef:
         if not provider_profile_id:
             raise ExecutionError("profile_missing", "Task does not have a provider profile id")
-        try:
-            if self.provider_service:
-                open_coro = self.provider_service.open_test_session(provider.provider_type, provider_profile_id)
-            else:
-                open_coro = provider.open_profile(provider_profile_id)
-            return await asyncio.wait_for(
-                open_coro,
-                timeout=settings.provider_open_timeout_sec,
+        policy = self._profile_open_retry_policy()
+        last_error: ExecutionError | None = None
+        for attempt in range(1, policy.max_attempts + 1):
+            try:
+                if self.provider_service:
+                    open_coro = self.provider_service.open_test_session(provider.provider_type, provider_profile_id)
+                else:
+                    open_coro = provider.open_profile(provider_profile_id)
+                session_ref = await asyncio.wait_for(
+                    open_coro,
+                    timeout=settings.provider_open_timeout_sec,
+                )
+                if not (session_ref.ws_endpoint or session_ref.debugging_address):
+                    raise ExecutionError(
+                        "missing_debug_endpoint",
+                        "Profile 已打开，但 Provider 未返回可附着的调试地址",
+                    )
+                return session_ref
+            except TimeoutError as exc:
+                last_error = ExecutionError(
+                    "profile_open_timeout",
+                    f"打开 Profile {provider_profile_id} 超过 {settings.provider_open_timeout_sec:.0f} 秒，已释放槽位",
+                )
+                last_error.__cause__ = exc
+            except ExecutionError as exc:
+                last_error = exc
+            except RuntimeError as exc:
+                last_error = ExecutionError("profile_open_failed", str(exc))
+                last_error.__cause__ = exc
+            except Exception as exc:  # noqa: BLE001
+                last_error = ExecutionError("profile_open_failed", str(exc))
+                last_error.__cause__ = exc
+
+            decision = self.retry_planner.decide(
+                scope=RetryScope.PROFILE_OPEN,
+                attempt=attempt,
+                policy=policy,
+                code=last_error.code,
+                message=last_error.message,
+                exc=last_error,
             )
-        except TimeoutError as exc:
-            raise ExecutionError(
-                "profile_open_timeout",
-                f"打开 Profile {provider_profile_id} 超过 {settings.provider_open_timeout_sec:.0f} 秒，已释放槽位",
-            ) from exc
-        except RuntimeError as exc:
-            raise ExecutionError("profile_open_failed", str(exc)) from exc
-        except Exception as exc:  # noqa: BLE001
-            raise ExecutionError("profile_open_failed", str(exc)) from exc
+            if not decision.retry:
+                raise last_error
+
+            await self._publish_retry(
+                scope=RetryScope.PROFILE_OPEN,
+                task_run_id=task_run_id,
+                provider_profile_id=provider_profile_id,
+                attempt=attempt,
+                policy=policy,
+                decision=decision,
+                error=last_error,
+            )
+            await self._release_profile_before_retry(provider, provider_profile_id)
+            await self.retry_planner.sleep(decision)
+
+        raise last_error or ExecutionError("profile_open_failed", f"打开 Profile {provider_profile_id} 失败")
+
+    def _profile_open_retry_policy(self) -> RetryPolicy:
+        return RetryPolicy(
+            max_attempts=max(1, settings.profile_open_retry_attempts),
+            initial_delay_sec=settings.profile_open_retry_initial_delay_sec,
+            backoff_factor=settings.profile_open_retry_backoff_factor,
+            max_delay_sec=settings.profile_open_retry_max_delay_sec,
+        )
+
+    def _browser_attach_retry_policy(self) -> RetryPolicy:
+        return RetryPolicy(
+            max_attempts=max(1, settings.browser_attach_retry_attempts),
+            initial_delay_sec=settings.browser_attach_retry_initial_delay_sec,
+            backoff_factor=settings.browser_attach_retry_backoff_factor,
+            max_delay_sec=settings.browser_attach_retry_max_delay_sec,
+        )
+
+    def _navigation_retry_policy(self) -> RetryPolicy:
+        return RetryPolicy(
+            max_attempts=max(1, settings.navigation_retry_attempts),
+            initial_delay_sec=settings.navigation_retry_initial_delay_sec,
+            backoff_factor=settings.navigation_retry_backoff_factor,
+            max_delay_sec=settings.navigation_retry_max_delay_sec,
+        )
+
+    async def _publish_retry(
+        self,
+        *,
+        scope: RetryScope,
+        task_run_id: str | None,
+        provider_profile_id: str | None,
+        attempt: int,
+        policy: RetryPolicy,
+        decision: RetryDecision,
+        error: ExecutionError,
+    ) -> None:
+        await self._publish(
+            "task.retry",
+            {
+                "task_run_id": task_run_id,
+                "provider_profile_id": provider_profile_id,
+                "scope": scope.value,
+                "attempt": attempt,
+                "max_attempts": policy.max_attempts,
+                "delay_sec": round(decision.delay_sec, 3),
+                "failure_category": decision.category.value,
+                "error_code": error.code,
+                "message": error.message,
+            },
+        )
+
+    async def _release_profile_before_retry(self, provider: BrowserProvider, provider_profile_id: str) -> None:
+        try:
+            await asyncio.wait_for(provider.close_profile(provider_profile_id), timeout=settings.provider_close_timeout_sec)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            await asyncio.wait_for(provider.reset_open_state(provider_profile_id), timeout=settings.provider_close_timeout_sec)
+        except Exception:  # noqa: BLE001
+            pass
 
     async def _mark_task_failed(self, task_run_id: str, error_code: str, error_message: str) -> None:
         async with self.session_factory() as session:
@@ -294,20 +392,86 @@ class ExecutionService:
         except ImportError as exc:  # pragma: no cover - depends on optional dependency
             raise ExecutionError("playwright_missing", "Install runtime with [automation] extra") from exc
 
-        playwright = await async_playwright().start()
-        cdp_target = endpoint
-        if endpoint.startswith("127.0.0.1:") or endpoint.startswith("localhost:"):
-            cdp_target = f"http://{endpoint}"
-        if endpoint.startswith("ws://"):
-            # connect_over_cdp accepts both ws and http targets in modern Playwright builds
+        playwright = None
+        browser = None
+        try:
+            playwright = await async_playwright().start()
             cdp_target = endpoint
-        browser = await playwright.chromium.connect_over_cdp(cdp_target)
-        if browser.contexts:
-            browser_context = browser.contexts[0]
-        else:
-            browser_context = await browser.new_context()
-        page = browser_context.pages[0] if browser_context.pages else await browser_context.new_page()
-        return browser, page, playwright
+            if endpoint.startswith("127.0.0.1:") or endpoint.startswith("localhost:"):
+                cdp_target = f"http://{endpoint}"
+            if endpoint.startswith("ws://"):
+                # connect_over_cdp accepts both ws and http targets in modern Playwright builds.
+                cdp_target = endpoint
+            browser = await playwright.chromium.connect_over_cdp(cdp_target)
+            if browser.contexts:
+                browser_context = browser.contexts[0]
+            else:
+                browser_context = await browser.new_context()
+            page = browser_context.pages[0] if browser_context.pages else await browser_context.new_page()
+            return browser, page, playwright
+        except Exception:
+            try:
+                if browser:
+                    await browser.close()
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                if playwright:
+                    await playwright.stop()
+            except Exception:  # noqa: BLE001
+                pass
+            raise
+
+    async def _attach_browser_with_retry(
+        self,
+        endpoint: str,
+        *,
+        task_run_id: str | None,
+        provider_profile_id: str | None,
+    ) -> tuple[Any, Any, Any]:
+        policy = self._browser_attach_retry_policy()
+        last_error: ExecutionError | None = None
+        for attempt in range(1, policy.max_attempts + 1):
+            try:
+                return await asyncio.wait_for(
+                    self._attach_browser(endpoint),
+                    timeout=settings.browser_attach_timeout_sec,
+                )
+            except TimeoutError as exc:
+                last_error = ExecutionError(
+                    "browser_attach_timeout",
+                    f"附着浏览器调试端点超过 {settings.browser_attach_timeout_sec:.0f} 秒",
+                )
+                last_error.__cause__ = exc
+            except ExecutionError as exc:
+                last_error = exc
+            except Exception as exc:  # noqa: BLE001
+                last_error = ExecutionError("browser_attach_failed", str(exc))
+                last_error.__cause__ = exc
+
+            decision = self.retry_planner.decide(
+                scope=RetryScope.BROWSER_ATTACH,
+                attempt=attempt,
+                policy=policy,
+                code=last_error.code,
+                message=last_error.message,
+                exc=last_error,
+            )
+            if not decision.retry:
+                raise last_error
+
+            await self._publish_retry(
+                scope=RetryScope.BROWSER_ATTACH,
+                task_run_id=task_run_id,
+                provider_profile_id=provider_profile_id,
+                attempt=attempt,
+                policy=policy,
+                decision=decision,
+                error=last_error,
+            )
+            await self.retry_planner.sleep(decision)
+
+        raise last_error or ExecutionError("browser_attach_failed", "附着浏览器失败")
 
     async def preview_locator(
         self,
@@ -1444,17 +1608,109 @@ class ExecutionService:
         if not step.url:
             raise ExecutionError("missing_url", f"Step '{step.id}' is missing url")
         timeout_ms = (step.timeout_sec or context.workflow.runtime_policy.page_timeout_sec) * 1000
-        started_at = asyncio.get_running_loop().time()
-        await context.page.goto(
-            self._render_value(step.url, context),
-            wait_until="domcontentloaded",
-            timeout=timeout_ms,
+        url = self._render_value(step.url, context)
+        result = await self._goto_with_retry(
+            context.page,
+            url=url,
+            timeout_ms=timeout_ms,
+            task_run_id=context.task_run_id,
         )
         context.variables["last_goto"] = {
             "url": context.page.url,
-            "elapsed_ms": int((asyncio.get_running_loop().time() - started_at) * 1000),
             "humanized": True,
+            **result,
         }
+
+    async def _goto_with_retry(
+        self,
+        page: Any,
+        *,
+        url: str,
+        timeout_ms: int,
+        task_run_id: str | None,
+    ) -> dict[str, Any]:
+        policy = self._navigation_retry_policy()
+        started_at = asyncio.get_running_loop().time()
+        retry_categories: list[str] = []
+        last_error: ExecutionError | None = None
+        for attempt in range(1, policy.max_attempts + 1):
+            try:
+                await page.goto(
+                    url,
+                    wait_until="domcontentloaded",
+                    timeout=timeout_ms,
+                )
+                stability = await self._wait_after_goto_stability(page, timeout_ms=timeout_ms)
+                return {
+                    "requested_url": url,
+                    "elapsed_ms": int((asyncio.get_running_loop().time() - started_at) * 1000),
+                    "attempts": attempt,
+                    "retry_categories": retry_categories,
+                    "stability": stability,
+                }
+            except ExecutionError as exc:
+                last_error = exc
+            except Exception as exc:  # noqa: BLE001
+                last_error = self._navigation_error_from_exception(exc)
+
+            decision = self.retry_planner.decide(
+                scope=RetryScope.NAVIGATION,
+                attempt=attempt,
+                policy=policy,
+                code=last_error.code,
+                message=last_error.message,
+                exc=last_error,
+            )
+            retry_categories.append(decision.category.value)
+            if not decision.retry:
+                raise last_error
+
+            await self._publish_retry(
+                scope=RetryScope.NAVIGATION,
+                task_run_id=task_run_id,
+                provider_profile_id=None,
+                attempt=attempt,
+                policy=policy,
+                decision=decision,
+                error=last_error,
+            )
+            await self.retry_planner.sleep(decision)
+
+        raise last_error or ExecutionError("navigation_failed", f"打开页面失败: {url}")
+
+    async def _wait_after_goto_stability(self, page: Any, *, timeout_ms: int) -> dict[str, Any]:
+        load_timeout_ms = min(timeout_ms, int(settings.navigation_load_state_timeout_sec * 1000))
+        networkidle_timeout_ms = min(timeout_ms, int(settings.navigation_networkidle_timeout_sec * 1000))
+        stability_timeout_ms = min(timeout_ms, int(settings.navigation_stability_timeout_sec * 1000))
+        checkpoints: dict[str, bool] = {}
+        for state, state_timeout_ms in [
+            ("load", load_timeout_ms),
+            ("networkidle", networkidle_timeout_ms),
+        ]:
+            if state_timeout_ms <= 0:
+                checkpoints[state] = False
+                continue
+            try:
+                await page.wait_for_load_state(state, timeout=state_timeout_ms)
+                checkpoints[state] = True
+            except Exception:  # noqa: BLE001
+                checkpoints[state] = False
+        checkpoints["page_stable"] = await self._wait_page_stable_probe(
+            page,
+            timeout_ms=stability_timeout_ms,
+            stable_ms=settings.navigation_stability_required_ms,
+        )
+        return checkpoints
+
+    @staticmethod
+    def _navigation_error_from_exception(exc: BaseException) -> ExecutionError:
+        message = str(exc)
+        normalized = message.lower()
+        if "timeout" in normalized:
+            return ExecutionError("navigation_timeout", message)
+        if "net::" in normalized or "proxy" in normalized or "socks" in normalized or "socket" in normalized:
+            return ExecutionError("navigation_network_error", message)
+        return ExecutionError("navigation_failed", message)
 
     async def _handle_click(self, step: WorkflowStep, context: ExecutionContext) -> None:
         timeout_ms = (step.timeout_sec or context.workflow.runtime_policy.step_timeout_sec) * 1000

@@ -23,6 +23,17 @@ struct RuntimeClientConfig {
     token: String,
 }
 
+#[derive(Clone, Serialize)]
+struct RuntimeBootStatus {
+    origin: String,
+    boot_error: Option<String>,
+    child_status: Option<String>,
+    log_dir: String,
+    desktop_log_tail: String,
+    stdout_log_tail: String,
+    stderr_log_tail: String,
+}
+
 struct RuntimeLaunchPlan {
     program: PathBuf,
     args: Vec<&'static str>,
@@ -35,14 +46,16 @@ struct RuntimeSidecarState {
     child: Mutex<Option<Child>>,
     boot_error: Mutex<Option<String>>,
     client_config: RuntimeClientConfig,
+    log_dir: PathBuf,
 }
 
 impl RuntimeSidecarState {
-    fn new(client_config: RuntimeClientConfig) -> Self {
+    fn new(client_config: RuntimeClientConfig, log_dir: PathBuf) -> Self {
         Self {
             child: Mutex::new(None),
             boot_error: Mutex::new(None),
             client_config,
+            log_dir,
         }
     }
 
@@ -55,6 +68,31 @@ impl RuntimeSidecarState {
     fn set_boot_error(&self, error: String) {
         if let Ok(mut slot) = self.boot_error.lock() {
             *slot = Some(error);
+        }
+    }
+
+    fn boot_error(&self) -> Option<String> {
+        self.boot_error
+            .lock()
+            .ok()
+            .and_then(|slot| slot.as_ref().cloned())
+    }
+
+    fn child_status(&self) -> Option<String> {
+        let Ok(mut slot) = self.child.lock() else {
+            return Some("无法读取 Runtime 子进程状态".to_string());
+        };
+        let Some(child) = slot.as_mut() else {
+            return Some("Runtime 子进程未启动".to_string());
+        };
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let message = format!("Runtime 子进程已退出：{status}");
+                *slot = None;
+                Some(message)
+            }
+            Ok(None) => None,
+            Err(error) => Some(format!("无法检查 Runtime 子进程状态：{error}")),
         }
     }
 
@@ -73,18 +111,37 @@ fn runtime_config(state: tauri::State<'_, RuntimeSidecarState>) -> RuntimeClient
     state.client_config.clone()
 }
 
+#[tauri::command]
+fn runtime_boot_status(state: tauri::State<'_, RuntimeSidecarState>) -> RuntimeBootStatus {
+    RuntimeBootStatus {
+        origin: state.client_config.origin.clone(),
+        boot_error: state.boot_error(),
+        child_status: state.child_status(),
+        log_dir: state.log_dir.display().to_string(),
+        desktop_log_tail: read_log_tail(&state.log_dir.join("desktop-bootstrap.log")),
+        stdout_log_tail: read_log_tail(&state.log_dir.join("runtime-stdout.log")),
+        stderr_log_tail: read_log_tail(&state.log_dir.join("runtime-stderr.log")),
+    }
+}
+
 fn main() {
     let app = tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![runtime_config])
+        .invoke_handler(tauri::generate_handler![
+            runtime_config,
+            runtime_boot_status
+        ])
         .setup(|app| {
             let log_dir = resolve_log_dir(app.handle());
             let runtime_host = configured_runtime_host();
             let runtime_port = configured_runtime_port();
             let runtime_token = resolve_runtime_token(app.handle(), &log_dir);
-            let state = RuntimeSidecarState::new(RuntimeClientConfig {
-                origin: format!("http://{runtime_host}:{runtime_port}"),
-                token: runtime_token.clone(),
-            });
+            let state = RuntimeSidecarState::new(
+                RuntimeClientConfig {
+                    origin: format!("http://{runtime_host}:{runtime_port}"),
+                    token: runtime_token.clone(),
+                },
+                log_dir.clone(),
+            );
 
             match bootstrap_runtime(
                 app.handle(),
@@ -207,11 +264,6 @@ fn resolve_launch_plan(app: &AppHandle) -> Result<RuntimeLaunchPlan, String> {
         .path()
         .resource_dir()
         .map_err(|error| format!("failed to resolve resource dir: {error}"))?;
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let workspace_root = manifest_dir
-        .join("../..")
-        .canonicalize()
-        .map_err(|error| format!("failed to resolve workspace root: {error}"))?;
     let runtime_binary_name = runtime_binary_name();
 
     let packaged_runtime_dir = resource_dir
@@ -227,6 +279,17 @@ fn resolve_launch_plan(app: &AppHandle) -> Result<RuntimeLaunchPlan, String> {
             mode: "packaged-binary",
         });
     }
+
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let workspace_root = manifest_dir
+        .join("../..")
+        .canonicalize()
+        .map_err(|error| {
+            format!(
+                "packaged runtime not found at {}; failed to resolve workspace root for dev fallback: {error}",
+                packaged_runtime_binary.display()
+            )
+        })?;
 
     let dev_runtime_dir = workspace_root
         .join("runtime")
@@ -366,6 +429,14 @@ fn append_log(log_dir: &Path, message: &str) {
     }
 }
 
+fn read_log_tail(path: &Path) -> String {
+    let Ok(raw) = fs::read_to_string(path) else {
+        return String::new();
+    };
+    let lines: Vec<&str> = raw.lines().rev().take(80).collect();
+    lines.into_iter().rev().collect::<Vec<&str>>().join("\n")
+}
+
 fn runtime_binary_name() -> String {
     if cfg!(target_os = "windows") {
         "opcontroller-runtime.exe".to_string()
@@ -380,6 +451,9 @@ fn ensure_executable(path: &Path) -> std::io::Result<()> {
 
     let metadata = fs::metadata(path)?;
     let mut permissions = metadata.permissions();
+    if permissions.mode() & 0o111 != 0 {
+        return Ok(());
+    }
     permissions.set_mode(permissions.mode() | 0o755);
     fs::set_permissions(path, permissions)
 }

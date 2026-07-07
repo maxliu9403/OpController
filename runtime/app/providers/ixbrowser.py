@@ -98,14 +98,14 @@ class IxBrowserProvider(BrowserProvider):
             return ProviderHealth(
                 installed=True,
                 healthy=True,
-                message="ixBrowser Local API reachable",
+                message="ixBrowser 本地 API 可访问",
                 api_base=settings.ixbrowser_api_base,
             )
         except Exception as exc:  # noqa: BLE001
             return ProviderHealth(
                 installed=False,
                 healthy=False,
-                message="ixBrowser Local API unreachable",
+                message="ixBrowser 本地 API 无法连接",
                 api_base=settings.ixbrowser_api_base,
                 details={"error": str(exc)},
             )
