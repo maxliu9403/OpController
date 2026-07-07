@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "build:runtime:mac": "cd ../runtime && ./.venv/bin/pyinstaller packaging/opcontroller-runtime.spec --noconfirm",
-    "build:runtime:win": "cd ../runtime && .venv/Scripts/python.exe -m PyInstaller packaging/opcontroller-runtime.spec --noconfirm",
+    "build:runtime:win": "cd ../runtime && .\\.venv\\Scripts\\python.exe -m PyInstaller packaging/opcontroller-runtime.spec --noconfirm",
     "build:mac": "npm run build && npm run build:runtime:mac && tauri build",
     "build:mac:internal": "npm run build:mac && bash ../scripts/package-mac-internal.sh",
     "build:win": "npm run build && npm run build:runtime:win && tauri build --bundles nsis,msi --verbose",
