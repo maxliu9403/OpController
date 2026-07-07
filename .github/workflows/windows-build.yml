@@ -41,7 +41,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -101,32 +101,17 @@ jobs:
         shell: pwsh
         run: npm run build:win
 
-      - name: Summarize artifacts
-        if: always()
+      - name: Verify Windows artifacts
         shell: pwsh
         run: |
-          $summary = $env:GITHUB_STEP_SUMMARY
-          "## OpController Windows Build" | Out-File -FilePath $summary -Append
-          "" | Out-File -FilePath $summary -Append
-          $files = @()
-          $files += Get-ChildItem desktop\src-tauri\target\release\bundle -Recurse -Filter *.exe -ErrorAction SilentlyContinue
-          $files += Get-ChildItem desktop\src-tauri\target\release\bundle -Recurse -Filter *.msi -ErrorAction SilentlyContinue
-          if (-not $files.Count) {
-            "No .exe/.msi artifacts were found." | Out-File -FilePath $summary -Append
-            exit 0
-          }
-          "| File | Size |" | Out-File -FilePath $summary -Append
-          "| --- | ---: |" | Out-File -FilePath $summary -Append
-          foreach ($file in $files) {
-            $size = [Math]::Round($file.Length / 1MB, 2)
-            "| ``$($file.FullName)`` | $size MB |" | Out-File -FilePath $summary -Append
-          }
+          .\scripts\collect-windows-artifacts.ps1 `
+            -TargetDir "desktop\src-tauri\target" `
+            -OutputDir "artifacts\windows" `
+            -SummaryFile $env:GITHUB_STEP_SUMMARY
 
       - name: Upload Windows bundles
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: OpController-windows-x64
           if-no-files-found: error
-          path: |
-            desktop/src-tauri/target/release/bundle/**/*.msi
-            desktop/src-tauri/target/release/bundle/**/*.exe
+          path: artifacts/windows/*

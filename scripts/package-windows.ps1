@@ -239,25 +239,18 @@ function Build-WindowsPackage {
 
 function Show-BuildArtifacts {
   Write-Step "构建产物"
-  $bundleDir = Join-Path $DesktopDir "src-tauri\target\release\bundle"
-  if (-not (Test-Path $bundleDir)) {
-    throw "未找到 bundle 输出目录：$bundleDir"
-  }
-
-  $artifacts = @()
-  $artifacts += Get-ChildItem -Path (Join-Path $bundleDir "nsis") -Filter "*.exe" -ErrorAction SilentlyContinue
-  $artifacts += Get-ChildItem -Path (Join-Path $bundleDir "msi") -Filter "*.msi" -ErrorAction SilentlyContinue
-
-  if (-not $artifacts.Count) {
-    Write-Warn "未找到 .exe/.msi 安装包，请检查 Tauri 输出目录：$bundleDir"
-    Get-ChildItem -Path $bundleDir -Recurse -File | Select-Object FullName, Length
-    return
-  }
-
-  foreach ($artifact in $artifacts) {
-    $sizeMb = [Math]::Round($artifact.Length / 1MB, 2)
-    Write-Host ("{0} ({1} MB)" -f $artifact.FullName, $sizeMb) -ForegroundColor Green
-  }
+  $collector = Join-Path $ScriptDir "collect-windows-artifacts.ps1"
+  $targetDir = Join-Path $DesktopDir "src-tauri\target"
+  $artifactDir = Join-Path $RepoRoot "outputs\windows"
+  Invoke-CommandChecked `
+    -FilePath "powershell" `
+    -Arguments @(
+      "-NoProfile",
+      "-ExecutionPolicy", "Bypass",
+      "-File", $collector,
+      "-TargetDir", $targetDir,
+      "-OutputDir", $artifactDir
+    )
 }
 
 New-Item -ItemType Directory -Force -Path $OutputLogDir | Out-Null

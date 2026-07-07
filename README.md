@@ -365,6 +365,12 @@ desktop/src-tauri/target/release/bundle/nsis/*.exe
 desktop/src-tauri/target/release/bundle/msi/*.msi
 ```
 
+一键脚本还会把最终安装包汇总复制到：
+
+```text
+outputs/windows/
+```
+
 ### 使用 GitHub Actions 构建 Windows 包
 
 如果不想在 Windows 电脑上安装构建环境，可以使用仓库内置的 GitHub Actions：
@@ -383,6 +389,14 @@ desktop/src-tauri/target/release/bundle/msi/*.msi
 *.exe
 *.msi
 ```
+
+Windows workflow 会显式执行：
+
+```text
+tauri build --bundles nsis,msi --verbose
+```
+
+如果构建失败，优先查看 `Build Windows desktop bundles` 步骤的 Tauri 日志。如果构建成功但没有上传产物，查看 `Verify Windows artifacts` 步骤；它会扫描 `desktop/src-tauri/target/release/bundle/nsis` 和 `desktop/src-tauri/target/release/bundle/msi`，并在 Job Summary 中列出最近生成的文件，方便定位 Tauri 实际输出到了哪里。
 
 workflow 文件位于：
 
