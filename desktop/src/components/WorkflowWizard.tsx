@@ -50,6 +50,7 @@ type WorkflowWizardProps = {
   workflowName?: string;
   canvasMeta?: ReactNode;
   canvasActions?: ReactNode;
+  readOnly?: boolean;
   onSelectCard: (card: WorkflowActionCard, options?: { insertAfterIndex?: number }) => void;
   onEditStep: (index: number) => void;
   onDeleteStep: (index: number) => void;
@@ -174,6 +175,7 @@ export function WorkflowWizard({
   workflowName,
   canvasMeta,
   canvasActions,
+  readOnly = false,
   onSelectCard,
   onEditStep,
   onDeleteStep,
@@ -182,11 +184,11 @@ export function WorkflowWizard({
   testPanel,
 }: WorkflowWizardProps) {
   return (
-    <div className="workflow-canvas">
+    <div className={`workflow-canvas${readOnly ? " workflow-canvas--readonly" : ""}`}>
       <aside className="workflow-canvas__palette">
         <div className="workflow-panel-heading">
           <Typography.Text className="section-eyebrow">动作库</Typography.Text>
-          <Typography.Text type="secondary">{cards.length} 个动作</Typography.Text>
+          <Typography.Text type="secondary">{readOnly ? "已锁定" : `${cards.length} 个动作`}</Typography.Text>
         </div>
         <div className="workflow-action-list">
           {cards.map((card) => {
@@ -194,6 +196,7 @@ export function WorkflowWizard({
             return (
               <button
                 className="workflow-action-tile"
+                disabled={readOnly}
                 key={card.type}
                 type="button"
                 onClick={() => onSelectCard(card)}
@@ -227,7 +230,7 @@ export function WorkflowWizard({
           </div>
           <Space size={8} wrap className="workflow-canvas-heading__actions">
             {canvasActions}
-            <Tag>{steps.length ? "可编辑" : "空流程"}</Tag>
+            <Tag>{readOnly ? "已锁定" : steps.length ? "可编辑" : "空流程"}</Tag>
           </Space>
         </div>
         <div className="workflow-step-scroll">
@@ -262,6 +265,7 @@ export function WorkflowWizard({
                             size="small"
                             type="text"
                             icon={<Pencil size={15} />}
+                            disabled={readOnly}
                             onClick={() => onEditStep(index)}
                           />
                         </Tooltip>
@@ -270,6 +274,7 @@ export function WorkflowWizard({
                             size="small"
                             type="text"
                             icon={<Copy size={15} />}
+                            disabled={readOnly}
                             onClick={() => onDuplicateStep(index)}
                           />
                         </Tooltip>
@@ -278,7 +283,7 @@ export function WorkflowWizard({
                             size="small"
                             type="text"
                             icon={<ArrowUp size={15} />}
-                            disabled={index === 0}
+                            disabled={readOnly || index === 0}
                             onClick={() => onMoveStep(index, "up")}
                           />
                         </Tooltip>
@@ -287,7 +292,7 @@ export function WorkflowWizard({
                             size="small"
                             type="text"
                             icon={<ArrowDown size={15} />}
-                            disabled={index === steps.length - 1}
+                            disabled={readOnly || index === steps.length - 1}
                             onClick={() => onMoveStep(index, "down")}
                           />
                         </Tooltip>
@@ -299,7 +304,7 @@ export function WorkflowWizard({
                           okButtonProps={{ danger: true }}
                           onConfirm={() => onDeleteStep(index)}
                         >
-                          <Button size="small" type="text" danger icon={<Trash2 size={15} />} />
+                          <Button size="small" type="text" danger disabled={readOnly} icon={<Trash2 size={15} />} />
                         </Popconfirm>
                       </Space>
                     </div>
@@ -307,11 +312,12 @@ export function WorkflowWizard({
                       {stepSummary(step, locator)}
                     </Typography.Paragraph>
                     <div className="workflow-step-item__insert-row">
-                      <Dropdown trigger={["click"]} menu={{ items: insertMenuItems }} disabled={!cards.length}>
+                      <Dropdown trigger={["click"]} menu={{ items: insertMenuItems }} disabled={readOnly || !cards.length}>
                         <Button
                           size="small"
                           type="dashed"
                           icon={<Plus size={14} />}
+                          disabled={readOnly}
                           onClick={(event) => event.preventDefault()}
                         >
                           在这里插入动作
@@ -325,7 +331,7 @@ export function WorkflowWizard({
           ) : (
             <Empty
               className="workflow-empty-state"
-              description="从左侧动作库选择第一个动作，画布会在这里生成步骤。"
+              description={readOnly ? "当前流程已锁定，点击流程列表中的“编排”后再添加动作。" : "从左侧动作库选择第一个动作，画布会在这里生成步骤。"}
             />
           )}
         </div>

@@ -6,7 +6,10 @@ from pathlib import Path
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.db import SessionLocal
+from app.providers.bitbrowser import BitBrowserProvider
+from app.providers.config_store import ProviderConfigStore
 from app.providers.ixbrowser import IxBrowserProvider
+from app.providers.nstbrowser import NstBrowserProvider
 from app.providers.registry import ProviderRegistry
 from app.services.batch_service import BatchService
 from app.services.execution_service import ExecutionService
@@ -35,11 +38,14 @@ class RuntimeContext:
 
     @classmethod
     def build(cls, repo_root: Path) -> "RuntimeContext":
+        provider_config_store = ProviderConfigStore(SessionLocal)
         registry = ProviderRegistry()
         registry.register(IxBrowserProvider())
+        registry.register(NstBrowserProvider(config_store=provider_config_store))
+        registry.register(BitBrowserProvider(config_store=provider_config_store))
         monitor = MonitorService()
         workflow_service = WorkflowService(root_dir=repo_root)
-        provider_service = ProviderService(registry=registry)
+        provider_service = ProviderService(registry=registry, config_store=provider_config_store)
         execution_service = ExecutionService(
             session_factory=SessionLocal,
             monitor=monitor,

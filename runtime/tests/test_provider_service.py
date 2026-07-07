@@ -9,6 +9,8 @@ from app.providers.registry import ProviderRegistry
 from app.schemas.provider import (
     ProfileSyncResult,
     ProviderCapability,
+    ProviderConfigField,
+    ProviderConfigUpdate,
     ProviderGroupRef,
     ProviderHealth,
     ProviderProfileRef,
@@ -95,10 +97,51 @@ class FakeProvider(BrowserProvider):
         return None
 
 
+class ConfigProvider(FakeProvider):
+    def config_fields(self) -> list[ProviderConfigField]:
+        return [
+            ProviderConfigField(
+                key="api_base",
+                label="API 地址",
+                type="text",
+                required=True,
+                default_value="http://localhost:8848/api/v2",
+            ),
+            ProviderConfigField(
+                key="api_key",
+                label="API Key",
+                type="password",
+                required=True,
+                secret=True,
+            ),
+        ]
+
+    def default_config_values(self) -> dict[str, Any]:
+        return {"api_base": "http://localhost:8848/api/v2"}
+
+
+class MemoryConfigStore:
+    def __init__(self, values: dict[str, Any] | None = None) -> None:
+        self.values = values or {}
+
+    async def get_values(self, provider_type: str) -> dict[str, Any]:
+        return dict(self.values)
+
+    async def save_values(self, provider_type: str, values: dict[str, Any]) -> dict[str, Any]:
+        self.values = dict(values)
+        return dict(self.values)
+
+
 def make_service(provider: FakeProvider) -> ProviderService:
     registry = ProviderRegistry()
     registry.register(provider)
     return ProviderService(registry)
+
+
+def make_config_service(provider: ConfigProvider, store: MemoryConfigStore) -> ProviderService:
+    registry = ProviderRegistry()
+    registry.register(provider)
+    return ProviderService(registry, config_store=store)  # type: ignore[arg-type]
 
 
 @pytest.fixture(autouse=True)
@@ -182,3 +225,21 @@ async def test_open_test_session_raises_when_reopen_still_has_no_debug_endpoint(
 
     with pytest.raises(RuntimeError, match="未返回可附着的调试地址"):
         await service.open_test_session("fake", "101")
+
+
+@pytest.mark.asyncio
+async def test_provider_config_secret_can_be_revealed_without_unmasking_default_config() -> None:
+    provider = ConfigProvider()
+    store = MemoryConfigStore({"api_base": "http://localhost:8848/api/v2", "api_key": "plain-secret"})
+    service = make_config_service(provider, store)
+
+    config = await service.get_config("fake")
+    assert config.values["api_key"] == ProviderService.MASKED_SECRET
+    assert config.credential_status.masked_fields["api_key"] == "pl********et"
+
+    secret = await service.reveal_config_secret("fake", "api_key")
+    assert secret.value == "plain-secret"
+
+    await service.save_config("fake", ProviderConfigUpdate(values={"api_key": ProviderService.MASKED_SECRET}))
+    secret_after_masked_save = await service.reveal_config_secret("fake", "api_key")
+    assert secret_after_masked_save.value == "plain-secret"

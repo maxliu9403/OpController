@@ -1,5 +1,5 @@
 import { Alert, Button, Col, Drawer, Empty, Input, Modal, Popconfirm, Row, Select, Space, Spin, Steps, Table, Tabs, Tag, Typography, message, type TableColumnsType } from "antd";
-import { Check, Copy, Download, FilePlus2, FolderPlus, Link2, Pencil, Trash2, Upload, X } from "lucide-react";
+import { Check, Copy, Download, FilePlus2, FolderPlus, Link2, LockKeyhole, Pencil, Trash2, Upload, X } from "lucide-react";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import YAML from "yaml";
 import { api } from "../api/client";
@@ -67,6 +67,13 @@ type WorkflowExportBundle = {
   workflow_yaml: string;
 };
 
+type WorkflowEditorMode = "locked" | "editing";
+type WorkflowOpenMode = "preview" | "edit";
+type PendingWorkflowSwitch = {
+  workflow: WorkflowRecord;
+  mode: WorkflowOpenMode;
+};
+
 function workflowNameFromYaml(workflowYaml: string, fallback = "导入流程") {
   try {
     const parsed = YAML.parse(workflowYaml) as WorkflowDraftDocument;
@@ -91,6 +98,12 @@ function rewriteWorkflowName(workflowYaml: string, name: string) {
   const parsed = (YAML.parse(workflowYaml) ?? {}) as WorkflowDraftDocument;
   parsed.metadata = parsed.metadata ?? {};
   parsed.metadata.name = name;
+  return YAML.stringify(parsed);
+}
+
+function rewriteWorkflowProvider(workflowYaml: string, providerType: string) {
+  const parsed = (YAML.parse(workflowYaml) ?? {}) as WorkflowDraftDocument;
+  applySelectedProfilePolicy(parsed, providerType, []);
   return YAML.stringify(parsed);
 }
 
@@ -456,6 +469,11 @@ export function WorkflowsPage() {
   const [renamingWorkflowValue, setRenamingWorkflowValue] = useState("");
   const [workflowActionLoadingId, setWorkflowActionLoadingId] = useState<string | null>(null);
   const [activeWorkflow, setActiveWorkflow] = useState<WorkflowRecord | null>(null);
+  const [editorMode, setEditorMode] = useState<WorkflowEditorMode>("locked");
+  const [pendingWorkflowSwitch, setPendingWorkflowSwitch] = useState<PendingWorkflowSwitch | null>(null);
+  const [pendingSwitchSaving, setPendingSwitchSaving] = useState(false);
+  const [pendingNewWorkflowOpen, setPendingNewWorkflowOpen] = useState(false);
+  const [pendingNewWorkflowSaving, setPendingNewWorkflowSaving] = useState(false);
   const [yamlValue, setYamlValue] = useState(DEFAULT_WORKFLOW);
   const [selectedCard, setSelectedCard] = useState<WorkflowActionCard | null>(null);
   const [editingStepIndex, setEditingStepIndex] = useState<number | null>(null);
@@ -574,6 +592,7 @@ export function WorkflowsPage() {
   useEffect(() => {
     if (!activeWorkflow && !creatingWorkflow && workflows.data?.length) {
       setActiveWorkflow(workflows.data[0]);
+      setEditorMode("locked");
       setYamlValue(workflows.data[0].workflow_yaml);
       setActiveFolder(workflows.data[0].folder || "未分组");
     }
@@ -625,6 +644,19 @@ export function WorkflowsPage() {
     () => new Set(folderRecords.map((folder) => folder.name)),
     [folderRecords],
   );
+  const isWorkflowEditable = creatingWorkflow || editorMode === "editing";
+  const hasUnsavedWorkflowChanges = useMemo(() => {
+    if (!isWorkflowEditable) {
+      return false;
+    }
+    if (creatingWorkflow) {
+      return true;
+    }
+    if (!activeWorkflow) {
+      return false;
+    }
+    return yamlValue !== activeWorkflow.workflow_yaml || activeFolder !== (activeWorkflow.folder || "未分组");
+  }, [activeFolder, activeWorkflow, creatingWorkflow, editorMode, isWorkflowEditable, yamlValue]);
 
   const workflowDraft = useMemo(() => {
     try {
@@ -667,11 +699,6 @@ export function WorkflowsPage() {
   const selectedGroup = useMemo(
     () => managedGroups.find((item) => item.external_group_id === selectedGroupId) ?? null,
     [managedGroups, selectedGroupId],
-  );
-  const runProfileCount = useMemo(
-    () =>
-      (profiles.data ?? []).filter((profile) => runGroupIds.includes(profileGroupId(profile))).length,
-    [profiles.data, runGroupIds],
   );
   const workflowProfileBindingStatus = useCallback(
     (workflow: WorkflowRecord) => {
@@ -786,7 +813,18 @@ export function WorkflowsPage() {
     }
   }, [managedGroups, selectedGroupId]);
 
+  const ensureWorkflowEditable = useCallback(() => {
+    if (isWorkflowEditable) {
+      return true;
+    }
+    message.info("当前流程画布已锁定，请先点击流程列表中的“编排”再修改节点。");
+    return false;
+  }, [isWorkflowEditable]);
+
   const openStepComposer = (card: WorkflowActionCard, options?: { insertAfterIndex?: number }) => {
+    if (!ensureWorkflowEditable()) {
+      return;
+    }
     if (!workflowDraft) {
       message.error("当前 YAML 结构不可解析，先修复高级视图里的语法");
       return;
@@ -799,6 +837,9 @@ export function WorkflowsPage() {
   };
 
   const handleEditStep = (index: number) => {
+    if (!ensureWorkflowEditable()) {
+      return;
+    }
     const step = draftSteps[index];
     const card = (actionCards.data ?? []).find((item) => item.type === step?.type);
     if (!step || !card) {
@@ -811,6 +852,9 @@ export function WorkflowsPage() {
   };
 
   const updateWorkflowDraft = (mutator: (parsed: WorkflowDraftDocument) => void, successMessage: string) => {
+    if (!ensureWorkflowEditable()) {
+      return;
+    }
     try {
       const parsed = (YAML.parse(yamlValue) ?? {}) as WorkflowDraftDocument;
       parsed.steps = parsed.steps ?? [];
@@ -883,17 +927,85 @@ export function WorkflowsPage() {
     setDryRunResult(null);
   };
 
-  const handleSelectWorkflow = (workflow: WorkflowRecord) => {
+  const resetComposerState = () => {
+    setSelectedCard(null);
+    setEditingStepIndex(null);
+    setInsertAfterStepIndex(null);
+    setDryRunResult(null);
+  };
+
+  const loadWorkflowIntoCanvas = (workflow: WorkflowRecord, mode: WorkflowOpenMode) => {
+    const policy = workflowPolicyFromRecord(workflow);
+    const groupIds = Array.isArray(policy.group_ids) ? policy.group_ids.map(String).filter(Boolean) : [];
+    const profileIds = Array.isArray(policy.profile_ids) ? policy.profile_ids.map(String).filter(Boolean) : [];
     setActiveWorkflow(workflow);
     setCreatingWorkflow(false);
     setActiveFolder(workflow.folder || "未分组");
     setYamlValue(workflow.workflow_yaml);
-    setSelectedCard(null);
-    setEditingStepIndex(null);
-    setInsertAfterStepIndex(null);
+    setSelectedProviderType(workflow.target_provider_type);
+    setRunGroupIds(groupIds);
+    setSelectedGroupId(groupIds[0] ?? null);
+    setSelectedProfileId(profileIds[0] ?? null);
+    setEditorMode(mode === "edit" ? "editing" : "locked");
+    resetComposerState();
   };
 
-  const handleNewWorkflow = () => {
+  const confirmEnterEditMode = (workflow: WorkflowRecord) => {
+    Modal.confirm({
+      title: "进入编排模式？",
+      okText: "进入编排",
+      cancelText: "保持锁定",
+      content: (
+        <Space direction="vertical" size={8}>
+          <Typography.Text>流程：{workflow.name}</Typography.Text>
+          <Typography.Text type="secondary">
+            当前流程默认是只读锁定状态。进入编排后才能新增、编辑、删除和调整节点。
+          </Typography.Text>
+        </Space>
+      ),
+      onOk: () => {
+        setEditorMode("editing");
+        setSelectedProviderType(workflow.target_provider_type);
+        message.success("流程画布已解锁，可以开始编排。");
+      },
+    });
+  };
+
+  const handleOpenWorkflow = (workflow: WorkflowRecord, mode: WorkflowOpenMode) => {
+    const isSameWorkflow = activeWorkflow?.id === workflow.id && !creatingWorkflow;
+    if (isSameWorkflow) {
+      if (mode === "edit") {
+        if (editorMode === "editing") {
+          message.info("当前流程已经处于编排模式。");
+          return;
+        }
+        confirmEnterEditMode(workflow);
+      }
+      return;
+    }
+
+    if (isWorkflowEditable) {
+      setPendingWorkflowSwitch({ workflow, mode });
+      return;
+    }
+
+    Modal.confirm({
+      title: mode === "edit" ? "切换并进入编排？" : "切换查看流程？",
+      okText: mode === "edit" ? "确认编排" : "确认查看",
+      cancelText: "取消",
+      content: (
+        <Space direction="vertical" size={8}>
+          <Typography.Text>即将切换到：{workflow.name}</Typography.Text>
+          <Typography.Text type="secondary">
+            {mode === "edit" ? "切换后会解锁下方流程画布。" : "切换后下方流程画布仍保持只读锁定。"}
+          </Typography.Text>
+        </Space>
+      ),
+      onOk: () => loadWorkflowIntoCanvas(workflow, mode),
+    });
+  };
+
+  const openNewWorkflowGuide = () => {
     const now = new Date();
     const name = `新建运营流程 ${now.getHours().toString().padStart(2, "0")}:${now.getMinutes().toString().padStart(2, "0")}`;
     const folder = workflowFolderFilter || activeFolder || "未分组";
@@ -903,6 +1015,14 @@ export function WorkflowsPage() {
     setNewWorkflowFolderInput("");
     setNewWorkflowStep(0);
     setNewWorkflowModalOpen(true);
+  };
+
+  const handleNewWorkflow = () => {
+    if (isWorkflowEditable) {
+      setPendingNewWorkflowOpen(true);
+      return;
+    }
+    openNewWorkflowGuide();
   };
 
   const handleCreateFolder = async () => {
@@ -1026,14 +1146,13 @@ export function WorkflowsPage() {
       await ensureWorkflowFolder(folder);
       setActiveWorkflow(null);
       setCreatingWorkflow(true);
+      setEditorMode("editing");
       setActiveFolder(folder);
       setWorkflowFolderFilter(folder);
       setSelectedProviderType(newWorkflowProviderType);
       setRunGroupIds([]);
       setYamlValue(buildDefaultWorkflow(name, newWorkflowProviderType));
-      setSelectedCard(null);
-      setEditingStepIndex(null);
-      setInsertAfterStepIndex(null);
+      resetComposerState();
       setNewWorkflowModalOpen(false);
       message.success("新流程草稿已就绪，可以开始编排。");
     } catch (cause) {
@@ -1059,11 +1178,17 @@ export function WorkflowsPage() {
     try {
       const copied = await api.duplicateWorkflow(workflow.id);
       setWorkflowReloadKey((value) => value + 1);
+      if (isWorkflowEditable) {
+        message.success(`流程已复制为「${copied.name}」，当前编排上下文保持不变。`);
+        return;
+      }
       setActiveWorkflow(copied);
       setCreatingWorkflow(false);
+      setEditorMode("locked");
       setActiveFolder(copied.folder || "未分组");
       setYamlValue(copied.workflow_yaml);
-      message.success("流程已复制");
+      resetComposerState();
+      message.success("流程已复制，点击“编排”后可修改副本。");
     } catch (cause) {
       message.error(cause instanceof Error ? cause.message : "复制失败");
     }
@@ -1125,6 +1250,66 @@ export function WorkflowsPage() {
     }
   };
 
+  const handleSwitchWorkflowProvider = (workflow: WorkflowRecord, providerType: string) => {
+    if (workflow.target_provider_type === providerType) {
+      return;
+    }
+    const currentProviderLabel =
+      providerOptions.find((option) => option.value === workflow.target_provider_type)?.label ?? workflow.target_provider_type;
+    const nextProviderLabel =
+      providerOptions.find((option) => option.value === providerType)?.label ?? providerType;
+
+    Modal.confirm({
+      title: "切换流程 Provider？",
+      okText: "确认切换",
+      cancelText: "取消",
+      content: (
+        <Space direction="vertical" size={8}>
+          <Typography.Text>流程：{workflow.name}</Typography.Text>
+          <Typography.Text>
+            {currentProviderLabel} → {nextProviderLabel}
+          </Typography.Text>
+          <Typography.Text type="secondary">
+            切换后会清空当前流程已关联的 Profile 组，需要重新点击“Profile 组”选择新 Provider 下的运行分组。
+          </Typography.Text>
+        </Space>
+      ),
+      onOk: async () => {
+        try {
+          setWorkflowActionLoadingId(workflow.id);
+          const workflowYaml = rewriteWorkflowProvider(workflow.workflow_yaml, providerType);
+          const saved = await api.updateWorkflow(workflow.id, workflowYaml, workflow.folder);
+          if (activeWorkflow?.id === workflow.id) {
+            setActiveWorkflow(saved);
+            setYamlValue(saved.workflow_yaml);
+            setEditorMode("locked");
+            setSelectedProviderType(saved.target_provider_type);
+            setRunGroupIds([]);
+            setSelectedGroupId(null);
+            setSelectedProfileId(null);
+            resetComposerState();
+          }
+          if (profileGroupModalWorkflow?.id === workflow.id) {
+            setProfileGroupModalWorkflow(null);
+            setProfileGroupDraftIds([]);
+          }
+          if (workflowProviderFilter && workflowProviderFilter !== providerType) {
+            setWorkflowProviderFilter(providerType);
+          }
+          setWorkflowReloadKey((value) => value + 1);
+          setGroupReloadKey((value) => value + 1);
+          setProfileReloadKey((value) => value + 1);
+          setSessionReloadKey((value) => value + 1);
+          message.success("流程 Provider 已切换，请重新关联 Profile 组。");
+        } catch (cause) {
+          message.error(cause instanceof Error ? cause.message : "切换 Provider 失败");
+        } finally {
+          setWorkflowActionLoadingId(null);
+        }
+      },
+    });
+  };
+
   const handleOpenProfileGroupModal = (workflow: WorkflowRecord) => {
     setProfileGroupModalWorkflow(workflow);
     setProfileGroupDraftIds(workflowRunGroupIds(workflow));
@@ -1168,11 +1353,10 @@ export function WorkflowsPage() {
       if (activeWorkflow?.id === workflow.id) {
         setActiveWorkflow(null);
         setCreatingWorkflow(false);
+        setEditorMode("locked");
         setYamlValue(DEFAULT_WORKFLOW);
         setActiveFolder("未分组");
-        setSelectedCard(null);
-        setEditingStepIndex(null);
-        setInsertAfterStepIndex(null);
+        resetComposerState();
         setRunGroupIds([]);
       }
       if (renamingWorkflowId === workflow.id) {
@@ -1191,10 +1375,9 @@ export function WorkflowsPage() {
   const handleCancelDraft = () => {
     setActiveWorkflow(null);
     setCreatingWorkflow(false);
+    setEditorMode("locked");
     setYamlValue(DEFAULT_WORKFLOW);
-    setSelectedCard(null);
-    setEditingStepIndex(null);
-    setInsertAfterStepIndex(null);
+    resetComposerState();
     setRunGroupIds([]);
     message.info("已取消当前未保存流程草稿");
   };
@@ -1259,9 +1442,11 @@ export function WorkflowsPage() {
       setWorkflowFolderFilter(targetFolder);
       setActiveWorkflow(created);
       setCreatingWorkflow(false);
+      setEditorMode("locked");
       setActiveFolder(created.folder || targetFolder);
       setYamlValue(created.workflow_yaml);
-      message.success(`已导入流程：${created.name}`);
+      resetComposerState();
+      message.success(`已导入流程：${created.name}，点击“编排”后可修改。`);
     } catch (cause) {
       message.error(cause instanceof Error ? cause.message : "导入流程失败");
     } finally {
@@ -1332,10 +1517,14 @@ export function WorkflowsPage() {
     }
   };
 
-  const handleSave = async () => {
+  const handleSave = async (options?: { silent?: boolean }) => {
     if (!activeWorkflow && !creatingWorkflow) {
       message.warning("请先选择一个流程，或点击新建流程开始编排。");
-      return;
+      return null;
+    }
+    if (!isWorkflowEditable) {
+      message.info("当前流程画布已锁定，请先点击“编排”再保存修改。");
+      return null;
     }
     try {
       const parsed = (YAML.parse(yamlValue) ?? {}) as WorkflowDraftDocument;
@@ -1350,16 +1539,118 @@ export function WorkflowsPage() {
       setYamlValue(saved.workflow_yaml);
       setWorkflowReloadKey((value) => value + 1);
       setFolderReloadKey((value) => value + 1);
-      message.success("流程模板已保存");
+      if (!options?.silent) {
+        message.success("流程模板已保存");
+      }
+      return saved;
     } catch (cause) {
       const errorMessage = cause instanceof Error ? cause.message : "保存失败";
       if (activeWorkflow && /workflow not found|404/i.test(errorMessage)) {
         setActiveWorkflow(null);
         setCreatingWorkflow(true);
         message.warning("当前流程已被删除，已转为未保存草稿，请确认后重新保存。");
-        return;
+        return null;
       }
       message.error(errorMessage);
+      return null;
+    }
+  };
+
+  const handleLockEditor = () => {
+    if (!isWorkflowEditable) {
+      return;
+    }
+    if (!hasUnsavedWorkflowChanges) {
+      setEditorMode("locked");
+      resetComposerState();
+      message.info("流程画布已锁定。");
+      return;
+    }
+    Modal.confirm({
+      title: "保存后锁定画布？",
+      okText: "保存并锁定",
+      cancelText: "继续编排",
+      content: "当前流程还有未保存修改。保存后会回到只读锁定状态。",
+      onOk: async () => {
+        const saved = await handleSave({ silent: true });
+        if (saved) {
+          setEditorMode("locked");
+          resetComposerState();
+          message.success("流程已保存并锁定。");
+        }
+      },
+    });
+  };
+
+  const completePendingWorkflowSwitch = (workflow: WorkflowRecord, mode: WorkflowOpenMode) => {
+    loadWorkflowIntoCanvas(workflow, mode);
+    setPendingWorkflowSwitch(null);
+  };
+
+  const handleDiscardAndSwitchWorkflow = () => {
+    if (!pendingWorkflowSwitch) {
+      return;
+    }
+    completePendingWorkflowSwitch(pendingWorkflowSwitch.workflow, pendingWorkflowSwitch.mode);
+    message.info(
+      pendingWorkflowSwitch.mode === "edit"
+        ? "已放弃当前修改，并进入新流程编排。"
+        : "已放弃当前修改，并切换到新流程预览。",
+    );
+  };
+
+  const handleSaveAndSwitchWorkflow = async () => {
+    if (!pendingWorkflowSwitch) {
+      return;
+    }
+    try {
+      setPendingSwitchSaving(true);
+      const saved = await handleSave({ silent: true });
+      if (!saved) {
+        return;
+      }
+      completePendingWorkflowSwitch(pendingWorkflowSwitch.workflow, pendingWorkflowSwitch.mode);
+      message.success(
+        pendingWorkflowSwitch.mode === "edit"
+          ? "当前流程已保存，并已进入新流程编排。"
+          : "当前流程已保存，并已切换到新流程预览。",
+      );
+    } finally {
+      setPendingSwitchSaving(false);
+    }
+  };
+
+  const handleDiscardAndCreateWorkflow = () => {
+    if (activeWorkflow && !creatingWorkflow) {
+      loadWorkflowIntoCanvas(activeWorkflow, "preview");
+    } else {
+      setActiveWorkflow(null);
+      setCreatingWorkflow(false);
+      setEditorMode("locked");
+      setYamlValue(DEFAULT_WORKFLOW);
+      setRunGroupIds([]);
+      setSelectedGroupId(null);
+      setSelectedProfileId(null);
+      resetComposerState();
+    }
+    setPendingNewWorkflowOpen(false);
+    openNewWorkflowGuide();
+    message.info("已放弃当前编辑，开始新建流程。");
+  };
+
+  const handleSaveAndCreateWorkflow = async () => {
+    try {
+      setPendingNewWorkflowSaving(true);
+      const saved = await handleSave({ silent: true });
+      if (!saved) {
+        return;
+      }
+      loadWorkflowIntoCanvas(saved, "preview");
+      setPendingNewWorkflowOpen(false);
+      openNewWorkflowGuide();
+      message.success("当前流程已保存，可以开始新建流程。");
+    } finally {
+      setPendingNewWorkflowSaving(false);
     }
   };
 
@@ -1464,6 +1755,9 @@ export function WorkflowsPage() {
   };
 
   const handleStepConfigured = async (values: StepComposerValues, locatorPreview: LocatorPreview | null) => {
+    if (!ensureWorkflowEditable()) {
+      throw new Error("当前流程画布已锁定，请先点击“编排”再修改节点。");
+    }
     if (!selectedCard) {
       throw new Error("当前没有选中的动作卡片");
     }
@@ -1536,8 +1830,13 @@ export function WorkflowsPage() {
   );
 
   const activeWorkflowName = activeWorkflow?.name ?? (creatingWorkflow ? workflowNameFromYaml(yamlValue, "未保存流程") : "请选择或新建流程");
-  const activeProviderLabel =
-    providerOptions.find((option) => option.value === selectedProviderType)?.label ?? selectedProviderType;
+  const editorStatusText = creatingWorkflow
+    ? "草稿编排中"
+    : activeWorkflow
+      ? isWorkflowEditable
+        ? `编排中：${activeWorkflow.name}`
+        : `只读查看：${activeWorkflow.name}`
+      : "未选择流程";
   const canExportCurrentWorkflow = Boolean(activeWorkflow || creatingWorkflow);
   const workflowTableColumns: TableColumnsType<WorkflowRecord> = [
       {
@@ -1567,7 +1866,7 @@ export function WorkflowsPage() {
             ) : (
               <>
                 <div className="workflow-table-name__row">
-                  <Button type="link" className="workflow-table-name__link" onClick={() => handleSelectWorkflow(item)}>
+                  <Button type="link" className="workflow-table-name__link" onClick={() => handleOpenWorkflow(item, "preview")}>
                     {item.name}
                   </Button>
                   <Button
@@ -1609,11 +1908,17 @@ export function WorkflowsPage() {
         title: "Provider",
         dataIndex: "target_provider_type",
         key: "provider",
-        width: 120,
-        render: (value: string) => (
-          <Tag>
-            {providerOptions.find((option) => option.value === value)?.label ?? value}
-          </Tag>
+        width: 170,
+        render: (value: string, item) => (
+          <Select
+            size="small"
+            style={{ width: "100%" }}
+            value={value}
+            options={providerOptions}
+            loading={workflowActionLoadingId === item.id}
+            disabled={workflowActionLoadingId === item.id}
+            onChange={(nextProviderType) => handleSwitchWorkflowProvider(item, nextProviderType)}
+          />
         ),
       },
       {
@@ -1644,8 +1949,13 @@ export function WorkflowsPage() {
         fixed: "right",
         render: (_, item) => (
           <Space className="workflow-table-actions" size={[6, 6]} wrap>
-            <Button size="small" type="primary" onClick={() => handleSelectWorkflow(item)}>
-              编排
+            <Button
+              size="small"
+              type={activeWorkflow?.id === item.id && editorMode === "editing" ? "default" : "primary"}
+              disabled={activeWorkflow?.id === item.id && editorMode === "editing"}
+              onClick={() => handleOpenWorkflow(item, "edit")}
+            >
+              {activeWorkflow?.id === item.id && editorMode === "editing" ? "编排中" : "编排"}
             </Button>
             <Button size="small" icon={<Link2 size={14} />} onClick={() => handleOpenProfileGroupModal(item)}>
               Profile 组
@@ -1702,6 +2012,7 @@ export function WorkflowsPage() {
           style={{ width: "100%" }}
           value={selectedProviderType}
           options={providerOptions}
+          disabled={!isWorkflowEditable}
           onChange={(value) => {
             setSelectedProviderType(value);
             setSelectedGroupId(null);
@@ -1911,9 +2222,10 @@ export function WorkflowsPage() {
                   onChange={(event) => setWorkflowSearch(event.target.value)}
                 />
               </Space>
-              <Tag>
-                {creatingWorkflow ? "新流程草稿" : activeWorkflow ? `正在编辑 ${activeWorkflow.name}` : "未选择流程"}
-              </Tag>
+              <span className={`workflow-editor-state ${isWorkflowEditable ? "is-editing" : "is-locked"}`}>
+                {isWorkflowEditable ? <Pencil size={14} /> : <LockKeyhole size={14} />}
+                {editorStatusText}
+              </span>
             </div>
             <Table<WorkflowRecord>
               className="workflow-record-table"
@@ -1926,14 +2238,16 @@ export function WorkflowsPage() {
               scroll={{ x: 1350, y: "100%" }}
               rowClassName={(item) => {
                 const bindingStatus = workflowProfileBindingStatus(item);
+                const isActiveItem = activeWorkflow?.id === item.id;
                 return [
                   "workflow-table-row",
-                  activeWorkflow?.id === item.id ? "is-active" : "",
+                  isActiveItem ? "is-active" : "",
+                  isActiveItem && editorMode === "editing" ? "is-editing" : "",
                   bindingStatus.usable ? "" : "is-unusable",
                 ].filter(Boolean).join(" ");
               }}
               onRow={(item) => ({
-                onDoubleClick: () => handleSelectWorkflow(item),
+                onDoubleClick: () => handleOpenWorkflow(item, "preview"),
               })}
             />
           </main>
@@ -1944,12 +2258,27 @@ export function WorkflowsPage() {
         title="流程编排工作台"
         extra={
           <Space wrap>
+            <span className={`workflow-editor-state ${isWorkflowEditable ? "is-editing" : "is-locked"}`}>
+              {isWorkflowEditable ? <Pencil size={14} /> : <LockKeyhole size={14} />}
+              {editorStatusText}
+            </span>
+            {activeWorkflow && !isWorkflowEditable ? (
+              <Button type="primary" icon={<Pencil size={15} />} onClick={() => handleOpenWorkflow(activeWorkflow, "edit")}>
+                进入编排
+              </Button>
+            ) : null}
+            {isWorkflowEditable ? (
+              <Button icon={<LockKeyhole size={15} />} onClick={handleLockEditor}>
+                锁定画布
+              </Button>
+            ) : null}
             <Select
               showSearch
               optionFilterProp="label"
               style={{ width: 220 }}
               value={activeFolder}
               options={folderOptions}
+              disabled={!isWorkflowEditable}
               onChange={setActiveFolder}
             />
             <Button onClick={handleValidate}>校验</Button>
@@ -1965,7 +2294,7 @@ export function WorkflowsPage() {
                 取消草稿
               </Button>
             ) : null}
-            <Button type="primary" disabled={!activeWorkflow && !creatingWorkflow} onClick={() => void handleSave()}>
+            <Button type="primary" disabled={!isWorkflowEditable || (!activeWorkflow && !creatingWorkflow)} onClick={() => void handleSave()}>
               保存当前流程
             </Button>
           </Space>
@@ -1984,21 +2313,7 @@ export function WorkflowsPage() {
                     steps={draftSteps}
                     locators={draftLocators}
                     workflowName={activeWorkflowName}
-                    canvasMeta={
-                      <Space size={[6, 4]} wrap>
-                        <Tag>
-                          {creatingWorkflow ? "未保存草稿" : activeWorkflow ? "已保存流程" : "未选择流程"}
-                        </Tag>
-                        <Tag>{activeFolder}</Tag>
-                        <Tag>{activeProviderLabel}</Tag>
-                        <Tag color={runGroupIds.length ? "green" : "red"}>
-                          运行 Profile {runProfileCount}
-                        </Tag>
-                        <Tag>
-                          {selectedSession ? "测试窗口已连接" : "未连接测试窗口"}
-                        </Tag>
-                      </Space>
-                    }
+                    readOnly={!isWorkflowEditable}
                     canvasActions={
                       <Popconfirm
                         title="全流程测试？"
@@ -2032,8 +2347,12 @@ export function WorkflowsPage() {
                           height="100%"
                           defaultLanguage="yaml"
                           value={yamlValue}
-                          onChange={(value) => setYamlValue(value ?? "")}
-                          options={{ minimap: { enabled: false }, fontSize: 14 }}
+                          onChange={(value) => {
+                            if (isWorkflowEditable) {
+                              setYamlValue(value ?? "");
+                            }
+                          }}
+                          options={{ minimap: { enabled: false }, fontSize: 14, readOnly: !isWorkflowEditable }}
                         />
                       </Suspense>
                     </Col>
@@ -2043,7 +2362,7 @@ export function WorkflowsPage() {
                           <Button type="primary" onClick={handleValidate}>
                             校验流程
                           </Button>
-                          <Button disabled={!activeWorkflow && !creatingWorkflow} onClick={() => void handleSave()}>保存当前流程</Button>
+                          <Button disabled={!isWorkflowEditable || (!activeWorkflow && !creatingWorkflow)} onClick={() => void handleSave()}>保存当前流程</Button>
                           <Button icon={<Download size={15} />} disabled={!canExportCurrentWorkflow} onClick={() => handleExportWorkflow()}>
                             导出 .opflow.json
                           </Button>
@@ -2057,6 +2376,103 @@ export function WorkflowsPage() {
           />
         </Space>
       </SectionCard>
+
+      <Modal
+        title="新建流程前确认"
+        open={pendingNewWorkflowOpen}
+        onCancel={() => {
+          if (!pendingNewWorkflowSaving) {
+            setPendingNewWorkflowOpen(false);
+          }
+        }}
+        footer={
+          <Space>
+            <Button disabled={pendingNewWorkflowSaving} onClick={() => setPendingNewWorkflowOpen(false)}>
+              取消
+            </Button>
+            <Button danger disabled={pendingNewWorkflowSaving} onClick={handleDiscardAndCreateWorkflow}>
+              放弃编辑并新建
+            </Button>
+            <Button type="primary" loading={pendingNewWorkflowSaving} onClick={() => void handleSaveAndCreateWorkflow()}>
+              保存当前并新建
+            </Button>
+          </Space>
+        }
+      >
+        <Space direction="vertical" size={12} style={{ width: "100%" }}>
+          <Typography.Text>
+            当前流程：{creatingWorkflow ? workflowNameFromYaml(yamlValue, "未保存草稿") : activeWorkflow?.name ?? "未选择"}
+          </Typography.Text>
+          <Alert
+            type={hasUnsavedWorkflowChanges ? "warning" : "info"}
+            showIcon
+            message={hasUnsavedWorkflowChanges ? "当前流程正在编排且有未保存内容" : "当前流程仍处于编排模式"}
+            description={
+              hasUnsavedWorkflowChanges
+                ? "直接新建会离开当前编排上下文。请选择保存当前修改、放弃当前编辑，或取消新建。"
+                : "为了避免误操作，新建流程前需要先确认是否结束当前编排。"
+            }
+          />
+        </Space>
+      </Modal>
+
+      <Modal
+        title="切换流程前确认"
+        open={Boolean(pendingWorkflowSwitch)}
+        onCancel={() => {
+          if (!pendingSwitchSaving) {
+            setPendingWorkflowSwitch(null);
+          }
+        }}
+        footer={
+          <Space>
+            <Button disabled={pendingSwitchSaving} onClick={() => setPendingWorkflowSwitch(null)}>
+              取消
+            </Button>
+            {hasUnsavedWorkflowChanges ? (
+              <Button danger disabled={pendingSwitchSaving} onClick={handleDiscardAndSwitchWorkflow}>
+                放弃修改并切换
+              </Button>
+            ) : null}
+            <Button
+              type="primary"
+              loading={pendingSwitchSaving}
+              onClick={() => {
+                if (hasUnsavedWorkflowChanges) {
+                  void handleSaveAndSwitchWorkflow();
+                  return;
+                }
+                if (pendingWorkflowSwitch) {
+                  completePendingWorkflowSwitch(pendingWorkflowSwitch.workflow, pendingWorkflowSwitch.mode);
+                }
+              }}
+            >
+              {hasUnsavedWorkflowChanges ? "保存并切换" : "确认切换"}
+            </Button>
+          </Space>
+        }
+      >
+        <Space direction="vertical" size={12} style={{ width: "100%" }}>
+          <Typography.Text>
+            当前流程：{creatingWorkflow ? workflowNameFromYaml(yamlValue, "未保存草稿") : activeWorkflow?.name ?? "未选择"}
+          </Typography.Text>
+          <Typography.Text>
+            目标流程：{pendingWorkflowSwitch?.workflow.name ?? "-"}
+          </Typography.Text>
+          <Alert
+            type={hasUnsavedWorkflowChanges ? "warning" : "info"}
+            showIcon
+            message={hasUnsavedWorkflowChanges ? "当前流程有未保存修改" : "将切换下方流程画布"}
+            description={
+              hasUnsavedWorkflowChanges
+                ? "请先选择保存当前修改，或放弃修改后再切换。"
+                : pendingWorkflowSwitch?.mode === "edit"
+                  ? "确认后会进入目标流程的编排模式。"
+                  : "确认后会以只读锁定状态查看目标流程。"
+            }
+          />
+        </Space>
+      </Modal>
 
       <Modal
         title="新建流程引导"

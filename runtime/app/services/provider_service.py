@@ -8,10 +8,17 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import ProfileRecord, ProviderScopeRecord
+from app.providers.base import BrowserProvider
+from app.providers.config_store import ProviderConfigStore
 from app.providers.registry import ProviderRegistry
 from app.schemas.provider import (
     ProfileSyncResult,
+    ProviderConfig,
+    ProviderConfigSecret,
+    ProviderConfigUpdate,
+    ProviderCredentialStatus,
     ProviderGroupRef,
+    ProviderHealth,
     ProviderInfo,
     ProviderScope,
     ProviderSessionRef,
@@ -19,11 +26,54 @@ from app.schemas.provider import (
 
 
 class ProviderService:
-    def __init__(self, registry: ProviderRegistry) -> None:
+    MASKED_SECRET = "********"
+
+    def __init__(self, registry: ProviderRegistry, config_store: ProviderConfigStore | None = None) -> None:
         self.registry = registry
+        self.config_store = config_store
 
     async def list_providers(self) -> list[ProviderInfo]:
         return [await provider.describe() for provider in self.registry.list()]
+
+    async def get_config(self, provider_type: str) -> ProviderConfig:
+        provider = self.registry.get(provider_type)
+        stored_values = await self._stored_config_values(provider_type)
+        return self._to_provider_config(provider, stored_values)
+
+    async def save_config(self, provider_type: str, payload: ProviderConfigUpdate) -> ProviderConfig:
+        provider = self.registry.get(provider_type)
+        existing = await self._stored_config_values(provider_type)
+        values = dict(existing)
+        fields_by_key = {field.key: field for field in provider.config_fields()}
+        for key, raw_value in payload.values.items():
+            field = fields_by_key.get(key)
+            if not field:
+                continue
+            if field.secret and raw_value in (None, "", self.MASKED_SECRET):
+                continue
+            values[key] = raw_value
+        if self.config_store:
+            await self.config_store.save_values(provider_type, values)
+            values = await self.config_store.get_values(provider_type)
+        return self._to_provider_config(provider, values)
+
+    async def reveal_config_secret(self, provider_type: str, key: str) -> ProviderConfigSecret:
+        provider = self.registry.get(provider_type)
+        fields_by_key = {field.key: field for field in provider.config_fields()}
+        field = fields_by_key.get(key)
+        if not field:
+            raise ValueError(f"未知配置字段：{key}")
+        if not field.secret:
+            raise ValueError(f"{field.label} 不是密钥字段")
+
+        stored_values = await self._stored_config_values(provider_type)
+        merged = {**provider.default_config_values(), **stored_values}
+        value = merged.get(key)
+        return ProviderConfigSecret(key=key, value=str(value or ""))
+
+    async def health_check(self, provider_type: str) -> ProviderHealth:
+        provider = self.registry.get(provider_type)
+        return await provider.health_check()
 
     async def sync_profiles(
         self,
@@ -50,6 +100,50 @@ class ProviderService:
             )
         await session.commit()
         return result
+
+    async def _stored_config_values(self, provider_type: str) -> dict:
+        if not self.config_store:
+            return {}
+        return await self.config_store.get_values(provider_type)
+
+    def _to_provider_config(self, provider: BrowserProvider, stored_values: dict) -> ProviderConfig:
+        fields = provider.config_fields()
+        defaults = provider.default_config_values()
+        merged = {**defaults, **stored_values}
+        safe_values: dict[str, str] = {}
+        masked_fields: dict[str, str] = {}
+        missing_required: list[str] = []
+
+        for field in fields:
+            value = merged.get(field.key)
+            has_value = value not in (None, "")
+            if field.required and not has_value:
+                missing_required.append(field.key)
+            if field.secret:
+                if has_value:
+                    masked_fields[field.key] = self._mask_secret(str(value))
+                    safe_values[field.key] = self.MASKED_SECRET
+                else:
+                    safe_values[field.key] = ""
+                continue
+            safe_values[field.key] = value if value is not None else field.default_value or ""
+
+        return ProviderConfig(
+            provider_type=provider.provider_type,
+            fields=fields,
+            values=safe_values,
+            credential_status=ProviderCredentialStatus(
+                configured=not missing_required,
+                masked_fields=masked_fields,
+                missing_required_fields=missing_required,
+            ),
+        )
+
+    @staticmethod
+    def _mask_secret(value: str) -> str:
+        if len(value) <= 4:
+            return "****"
+        return f"{value[:2]}{'*' * max(4, min(10, len(value) - 4))}{value[-2:]}"
 
     async def list_cached_profiles(
         self,
@@ -320,9 +414,9 @@ class ProviderService:
                         },
                     )
                 except Exception as reset_error:  # noqa: BLE001
-                    raise self._missing_debug_endpoint_error() from reset_error
+                    raise self._missing_debug_endpoint_error(provider_type) from reset_error
             else:
-                raise self._missing_debug_endpoint_error() from reopen_error
+                raise self._missing_debug_endpoint_error(provider_type) from reopen_error
 
         if self._is_attachable(reopened):
             return reopened
@@ -335,7 +429,7 @@ class ProviderService:
         if waited:
             return waited
 
-        raise self._missing_debug_endpoint_error()
+        raise self._missing_debug_endpoint_error(provider_type)
 
     async def _wait_for_attachable_session(
         self,
@@ -363,12 +457,15 @@ class ProviderService:
         message = str(exc).lower()
         return "已经打开" in str(exc) or "already" in message or "opened" in message
 
-    @staticmethod
-    def _missing_debug_endpoint_error() -> RuntimeError:
+    def _missing_debug_endpoint_error(self, provider_type: str) -> RuntimeError:
+        try:
+            provider_name = self.registry.get(provider_type).display_name
+        except Exception:  # noqa: BLE001
+            provider_name = provider_type
         return RuntimeError(
-            "Profile 已经打开但 ixBrowser Local API 未返回可附着的调试地址 "
+            f"Profile 已经打开但 {provider_name} Local API 未返回可附着的调试地址 "
             "(ws/debugging_address)。系统已尝试关闭、重置并重新打开；"
-            "请确认该窗口不是手动残留窗口，必要时先在 ixBrowser 中关闭该 Profile 后重试。"
+            f"请确认该窗口不是手动残留窗口，必要时先在 {provider_name} 中关闭该 Profile 后重试。"
         )
 
     @staticmethod

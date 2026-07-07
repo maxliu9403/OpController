@@ -255,6 +255,10 @@ export function SchedulesPage() {
     () => (providers.data ?? []).map((item) => ({ value: item.provider_type, label: item.display_name })),
     [providers.data],
   );
+  const providerNameByType = useMemo(
+    () => new Map((providers.data ?? []).map((item) => [item.provider_type, item.display_name])),
+    [providers.data],
+  );
   const workflowOptions = useMemo(
     () => (workflows.data ?? []).map((item) => ({ value: item.id, label: item.name })),
     [workflows.data],
@@ -294,6 +298,8 @@ export function SchedulesPage() {
     () => groupSummaryLabel(providerGroups.data, selectedWorkflowGroupIds),
     [providerGroups.data, selectedWorkflowGroupIds],
   );
+  const selectedWorkflowProviderLabel =
+    providerNameByType.get(selectedWorkflowProviderType ?? "") ?? selectedWorkflowProviderType ?? "未选择";
 
   useEffect(() => {
     if (!form.getFieldValue("provider_type") && providers.data?.length) {
@@ -438,6 +444,7 @@ export function SchedulesPage() {
         content: (
           <Space direction="vertical" size={8}>
             <Typography.Text>流程：{selectedWorkflow.name}</Typography.Text>
+            <Typography.Text>指纹浏览器：{selectedWorkflowProviderLabel}</Typography.Text>
             <Typography.Text>Profile 组：{selectedWorkflowGroupSummary}</Typography.Text>
             <Typography.Text>可运行 Profile：{selectedWorkflowProfileCount} 个</Typography.Text>
             <Typography.Text>并发槽位：{values.max_concurrency}</Typography.Text>
@@ -701,7 +708,11 @@ export function SchedulesPage() {
                 </Space>
               ),
             },
-            { title: "Provider", dataIndex: "provider_type" },
+            {
+              title: "指纹浏览器",
+              dataIndex: "provider_type",
+              render: (value: string) => providerNameByType.get(value) ?? value,
+            },
             {
               title: "上次运行",
               dataIndex: "last_run_at",

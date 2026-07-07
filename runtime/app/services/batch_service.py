@@ -182,7 +182,8 @@ class BatchService:
     ) -> InputProfileMappingValidation:
         workflow_record = await self.workflow_service.get_workflow(session, workflow_id)
         workflow = WorkflowDefinition.model_validate(workflow_record.normalized_workflow_json)
-        effective_provider_type = provider_type or workflow.profile_policy.provider_type
+        workflow_provider_type = self._workflow_provider_type(workflow_record, workflow)
+        effective_provider_type = workflow_provider_type
         profiles, empty_reason = await self._resolve_profiles(
             session,
             effective_provider_type,
@@ -198,6 +199,15 @@ class BatchService:
         seen: set[str] = set()
         profile_id_set = {profile.external_profile_id for profile in profiles}
 
+        if provider_type and provider_type != workflow_provider_type:
+            invalid_rows.append(
+                {
+                    "row_index": 1,
+                    "reason": "provider_mismatch",
+                    "expected_provider_type": workflow_provider_type,
+                    "actual_provider_type": provider_type,
+                }
+            )
         if not rows:
             warnings.append("Excel/CSV 没有可执行数据行")
         if "profile_id" not in detected_columns:
@@ -364,17 +374,23 @@ class BatchService:
             raise ValueError("批次正在运行或等待运行，不能重复启动")
         if batch.status == BatchStatus.COMPLETED:
             raise ValueError("已完成批次不需要重试")
-        await self._ensure_provider_ready_for_run(request.provider_type, batch_id=batch.id)
+        workflow_record = await self.workflow_service.get_workflow(session, request.workflow_id)
+        workflow = WorkflowDefinition.model_validate(workflow_record.normalized_workflow_json)
+        effective_provider_type = self._workflow_provider_type(workflow_record, workflow)
+        if request.provider_type and request.provider_type != effective_provider_type:
+            raise ValueError(
+                f"流程绑定的指纹浏览器是 {self._provider_display_name(effective_provider_type)}，"
+                f"当前选择的是 {self._provider_display_name(request.provider_type)}，请切换后重试"
+            )
+        await self._ensure_provider_ready_for_run(effective_provider_type, batch_id=batch.id)
         if batch.status in {BatchStatus.FAILED, BatchStatus.CANCELLED}:
             await self._clear_batch_runs(session, batch.id)
             batch.success_count = 0
             batch.failure_count = 0
             batch.average_duration_ms = 0
             batch.result_summary_json = {}
-        workflow_record = await self.workflow_service.get_workflow(session, request.workflow_id)
-        workflow = WorkflowDefinition.model_validate(workflow_record.normalized_workflow_json)
         batch.workflow_id = request.workflow_id
-        batch.provider_type = request.provider_type
+        batch.provider_type = effective_provider_type
         batch.runtime_mode = request.runtime_mode
         batch.profile_policy_snapshot = request.profile_policy_snapshot or workflow.profile_policy.model_dump(mode="json")
         await self._validate_and_map_batch_rows(
@@ -391,6 +407,16 @@ class BatchService:
         task = asyncio.create_task(self._run_batch(batch.id, request.requested_slots, control))
         self._active_jobs[batch.id] = task
         return await self.get_batch_detail(session, batch.id)
+
+    @staticmethod
+    def _workflow_provider_type(workflow_record: Any, workflow: WorkflowDefinition) -> str:
+        return workflow.profile_policy.provider_type or workflow_record.target_provider_type
+
+    def _provider_display_name(self, provider_type: str) -> str:
+        try:
+            return self.registry.get(provider_type).display_name
+        except Exception:  # noqa: BLE001
+            return provider_type
 
     async def _ensure_provider_ready_for_run(self, provider_type: str, *, batch_id: str | None = None) -> None:
         try:
@@ -1124,6 +1150,12 @@ end tell
         messages: list[str] = []
         if validation.invalid_rows:
             reasons = {str(item.get("reason")) for item in validation.invalid_rows}
+            if "provider_mismatch" in reasons:
+                first = next((item for item in validation.invalid_rows if item.get("reason") == "provider_mismatch"), {})
+                messages.append(
+                    "选择的指纹浏览器与流程不一致："
+                    f"流程需要 {first.get('expected_provider_type')}，当前是 {first.get('actual_provider_type')}"
+                )
             if "missing_profile_id_column" in reasons:
                 messages.append("Excel 必须包含固定列 profile_id")
             if "empty_profile_id" in reasons:
@@ -1131,7 +1163,7 @@ end tell
         if validation.duplicate_profile_ids:
             messages.append(f"profile_id 重复: {', '.join(validation.duplicate_profile_ids[:10])}")
         if validation.out_of_scope_profile_ids:
-            messages.append(f"profile_id 不在流程运行 Profile 组内: {', '.join(validation.out_of_scope_profile_ids[:10])}")
+            messages.append(f"profile_id 在当前指纹浏览器的流程运行 Profile 组内不存在: {', '.join(validation.out_of_scope_profile_ids[:10])}")
         if validation.missing_profile_ids:
             messages.append(f"Excel 缺少流程 Profile 组内的 profile_id: {', '.join(validation.missing_profile_ids[:10])}")
         if validation.warnings:

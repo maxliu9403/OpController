@@ -1,10 +1,10 @@
-import { Alert, Button, Input, Select, Space, Spin, Table, Tag, Typography, message } from "antd";
+import { Alert, Button, Form, Input, Select, Space, Spin, Table, Tag, Typography, message } from "antd";
 import type { Key } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
 import { SectionCard } from "../components/SectionCard";
 import { usePolling } from "../hooks/usePolling";
-import type { ProfileRecord, ProviderScope } from "../types";
+import type { ProfileRecord, ProviderConfig, ProviderScope } from "../types";
 
 function profileGroupId(profile: ProfileRecord) {
   const raw = profile.group_summary?.id;
@@ -53,15 +53,33 @@ function dedupe(values: string[]) {
   return Array.from(new Set(values.filter(Boolean).map(String)));
 }
 
+const MASKED_SECRET = "********";
+
+function credentialStatusTag(config: ProviderConfig | null | undefined) {
+  if (!config?.fields.length) {
+    return <Tag>无需额外配置</Tag>;
+  }
+  if (config.credential_status.configured) {
+    return <Tag color="green">已配置</Tag>;
+  }
+  return <Tag color="orange">需要配置</Tag>;
+}
+
 export function ProvidersPage() {
   const providers = usePolling(api.listProviders, { intervalMs: 10000, cacheKey: "providers:list" });
   const [selectedProviderType, setSelectedProviderType] = useState("ixbrowser");
   const [profileReloadKey, setProfileReloadKey] = useState(0);
   const [scopeReloadKey, setScopeReloadKey] = useState(0);
   const [groupReloadKey, setGroupReloadKey] = useState(0);
+  const [configReloadKey, setConfigReloadKey] = useState(0);
   const [syncing, setSyncing] = useState(false);
   const [savingScope, setSavingScope] = useState(false);
+  const [savingConfig, setSavingConfig] = useState(false);
+  const [checkingHealth, setCheckingHealth] = useState(false);
+  const [secretVisible, setSecretVisible] = useState<Record<string, boolean>>({});
+  const [secretLoadingKey, setSecretLoadingKey] = useState<string | null>(null);
   const [draftScope, setDraftScope] = useState<ProviderScope | null>(null);
+  const [configForm] = Form.useForm();
   const [groupFilter, setGroupFilter] = useState<string | null>(null);
   const [profileSearch, setProfileSearch] = useState("");
   const [selectedProfileIds, setSelectedProfileIds] = useState<Key[]>([]);
@@ -78,6 +96,10 @@ export function ProvidersPage() {
     () => api.getProviderScope(selectedProviderType),
     [selectedProviderType, scopeReloadKey],
   );
+  const configFetcher = useCallback(
+    () => api.getProviderConfig(selectedProviderType),
+    [selectedProviderType, configReloadKey],
+  );
   const groups = usePolling(groupsFetcher, {
     intervalMs: 10000,
     cacheKey: `provider:${selectedProviderType}:groups`,
@@ -91,6 +113,11 @@ export function ProvidersPage() {
   const scope = usePolling(scopeFetcher, {
     intervalMs: 10000,
     cacheKey: `provider:${selectedProviderType}:scope`,
+    enabled: Boolean(selectedProviderType),
+  });
+  const providerConfig = usePolling(configFetcher, {
+    intervalMs: 10000,
+    cacheKey: `provider:${selectedProviderType}:config`,
     enabled: Boolean(selectedProviderType),
   });
 
@@ -107,6 +134,13 @@ export function ProvidersPage() {
     setDraftScope(normalizeScope(scope.data, selectedProviderType));
     setSelectedProfileIds([]);
   }, [scope.data, selectedProviderType]);
+
+  useEffect(() => {
+    configForm.resetFields();
+    configForm.setFieldsValue(providerConfig.data?.values ?? {});
+    setSecretVisible({});
+    setSecretLoadingKey(null);
+  }, [configForm, providerConfig.data]);
 
   const providerOptions = useMemo(
     () => (providers.data ?? []).map((item) => ({ value: item.provider_type, label: item.display_name })),
@@ -174,6 +208,10 @@ export function ProvidersPage() {
   }, [groupFilter, profileListGroupOptions]);
 
   const selectedProfileIdStrings = selectedProfileIds.map(String);
+  const selectedProviderInfo = useMemo(
+    () => (providers.data ?? []).find((item) => item.provider_type === selectedProviderType) ?? null,
+    [providers.data, selectedProviderType],
+  );
 
   const handleIncludeSelected = () => {
     updateDraftScope((current) => ({
@@ -215,6 +253,72 @@ export function ProvidersPage() {
     }
   }, [selectedProviderType]);
 
+  const handleSaveConfig = async () => {
+    if (!providerConfig.data?.fields.length) {
+      return;
+    }
+    setSavingConfig(true);
+    try {
+      const values = await configForm.validateFields();
+      await api.updateProviderConfig(selectedProviderType, values);
+      setConfigReloadKey((value) => value + 1);
+      message.success("Provider 配置已保存");
+    } catch (cause) {
+      message.error(cause instanceof Error ? cause.message : "保存配置失败");
+    } finally {
+      setSavingConfig(false);
+    }
+  };
+
+  const handleHealthCheck = async () => {
+    setCheckingHealth(true);
+    try {
+      if (providerConfig.data?.fields.length) {
+        const values = await configForm.validateFields();
+        await api.updateProviderConfig(selectedProviderType, values);
+      }
+      const result = await api.providerHealthCheck(selectedProviderType);
+      if (result.healthy) {
+        message.success(result.message || "Provider 可用");
+      } else {
+        message.warning(result.message || "Provider 未就绪");
+      }
+      setConfigReloadKey((value) => value + 1);
+    } catch (cause) {
+      message.error(cause instanceof Error ? cause.message : "连通性测试失败");
+    } finally {
+      setCheckingHealth(false);
+    }
+  };
+
+  const handleSecretVisibleChange = async (fieldKey: string, visible: boolean) => {
+    if (!visible) {
+      setSecretVisible((current) => ({ ...current, [fieldKey]: false }));
+      return;
+    }
+
+    const currentValue = configForm.getFieldValue(fieldKey);
+    if (currentValue && currentValue !== MASKED_SECRET) {
+      setSecretVisible((current) => ({ ...current, [fieldKey]: true }));
+      return;
+    }
+
+    setSecretLoadingKey(fieldKey);
+    try {
+      const result = await api.getProviderConfigSecret(selectedProviderType, fieldKey);
+      if (!result.value) {
+        message.warning("当前还没有保存该密钥，请先填写并保存");
+        return;
+      }
+      configForm.setFieldValue(fieldKey, result.value);
+      setSecretVisible((current) => ({ ...current, [fieldKey]: true }));
+    } catch (cause) {
+      message.error(cause instanceof Error ? cause.message : "读取密钥失败");
+    } finally {
+      setSecretLoadingKey(null);
+    }
+  };
+
   const handleSaveScope = async () => {
     setSavingScope(true);
     try {
@@ -253,7 +357,7 @@ export function ProvidersPage() {
     }
   };
 
-  if (providers.loading || groups.loading || profiles.loading || scope.loading || !draftScope) {
+  if (providers.loading || groups.loading || profiles.loading || scope.loading || providerConfig.loading || !draftScope) {
     return <Spin size="large" />;
   }
 
@@ -299,6 +403,77 @@ export function ProvidersPage() {
             <Tag color="red">显式排除 {effectiveScope.exclude_profile_ids.length}</Tag>
           </Space>
         </Space>
+      </SectionCard>
+
+      <SectionCard
+        title="Provider 配置"
+        subtitle={
+          providerConfig.data?.fields.length
+            ? "按当前指纹浏览器要求配置本地 API 地址、端口或密钥；密钥字段会脱敏展示。"
+            : "当前 Provider 使用默认本地配置。"
+        }
+        extra={
+          <Space wrap>
+            {credentialStatusTag(providerConfig.data)}
+            <Button loading={checkingHealth} onClick={() => void handleHealthCheck()}>
+              测试连通性
+            </Button>
+            {providerConfig.data?.fields.length ? (
+              <Button type="primary" loading={savingConfig} onClick={() => void handleSaveConfig()}>
+                保存配置
+              </Button>
+            ) : null}
+          </Space>
+        }
+      >
+        {providerConfig.data?.fields.length ? (
+          <Form form={configForm} layout="vertical">
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: 16 }}>
+              {providerConfig.data.fields.map((field) => (
+                <Form.Item
+                  key={field.key}
+                  name={field.key}
+                  label={field.label}
+                  help={field.help_text}
+                  rules={field.required ? [{ required: true, message: `请填写${field.label}` }] : undefined}
+                >
+                  {field.secret ? (
+                    <Input.Password
+                      autoComplete="new-password"
+                      disabled={secretLoadingKey === field.key}
+                      placeholder={
+                        providerConfig.data?.credential_status.masked_fields[field.key]
+                          ? `已保存：${providerConfig.data.credential_status.masked_fields[field.key]}`
+                          : field.placeholder ?? undefined
+                      }
+                      visibilityToggle={{
+                        visible: Boolean(secretVisible[field.key]),
+                        onVisibleChange: (visible) => void handleSecretVisibleChange(field.key, visible),
+                      }}
+                    />
+                  ) : (
+                    <Input placeholder={field.placeholder ?? undefined} />
+                  )}
+                </Form.Item>
+              ))}
+            </div>
+            {!providerConfig.data.credential_status.configured ? (
+              <Alert
+                type="warning"
+                showIcon
+                message="Provider 尚未完成配置"
+                description={`缺少字段：${providerConfig.data.credential_status.missing_required_fields.join("、") || "未知"}`}
+              />
+            ) : null}
+          </Form>
+        ) : (
+          <Alert
+            type="info"
+            showIcon
+            message={`${selectedProviderInfo?.display_name ?? selectedProviderType} 暂无额外配置项`}
+            description="如果后续 Provider 需要 API Key、端口或本地地址，会在这里自动出现配置表单。"
+          />
+        )}
       </SectionCard>
 
       <SectionCard

@@ -25,6 +25,11 @@ class Settings(BaseSettings):
     provider_default_type: str = "ixbrowser"
     ixbrowser_api_base: str = "http://127.0.0.1:53200"
     ixbrowser_api_timeout_sec: float = 10.0
+    nstbrowser_api_base: str = "http://localhost:8848/api/v2"
+    nstbrowser_api_key: str | None = None
+    nstbrowser_api_timeout_sec: float = 10.0
+    bitbrowser_api_base: str = "http://127.0.0.1:54345"
+    bitbrowser_api_timeout_sec: float = 10.0
     scheduler_poll_seconds: int = 5
     default_slot_limit: int = 6
     max_slot_limit: int = 10

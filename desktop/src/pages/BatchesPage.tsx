@@ -73,6 +73,10 @@ export function BatchesPage() {
     () => (providers.data ?? []).map((item) => ({ value: item.provider_type, label: item.display_name })),
     [providers.data],
   );
+  const providerNameByType = useMemo(
+    () => new Map((providers.data ?? []).map((item) => [item.provider_type, item.display_name])),
+    [providers.data],
+  );
   const workflowOptions = useMemo(
     () => (workflows.data ?? []).map((item) => ({ value: item.id, label: item.name })),
     [workflows.data],
@@ -114,6 +118,8 @@ export function BatchesPage() {
     () => groupSummaryLabel(providerGroups.data, selectedWorkflowGroupIds),
     [providerGroups.data, selectedWorkflowGroupIds],
   );
+  const selectedWorkflowProviderLabel =
+    providerNameByType.get(selectedWorkflowProviderType ?? "") ?? selectedWorkflowProviderType ?? "未选择";
 
   useEffect(() => {
     if (!form.getFieldValue("provider_type") && providers.data?.length) {
@@ -192,6 +198,7 @@ export function BatchesPage() {
       content: (
         <Space direction="vertical" size={8}>
           <Typography.Text>流程：{selectedWorkflow.name}</Typography.Text>
+          <Typography.Text>指纹浏览器：{selectedWorkflowProviderLabel}</Typography.Text>
           <Typography.Text>Profile 组：{selectedWorkflowGroupSummary}</Typography.Text>
           <Typography.Text>可运行 Profile：{selectedWorkflowProfileCount} 个</Typography.Text>
           <Typography.Text>并发槽位：{form.getFieldValue("requested_slots") ?? 6}</Typography.Text>
@@ -277,6 +284,7 @@ export function BatchesPage() {
         content: (
           <Space direction="vertical" size={8}>
             <Typography.Text>流程：{workflow.name}</Typography.Text>
+            <Typography.Text>指纹浏览器：{providerNameByType.get(batch.provider_type) ?? batch.provider_type}</Typography.Text>
             <Typography.Text>Profile 组：{groupSummaryLabel(groups, groupIds)}</Typography.Text>
             <Typography.Text>可运行 Profile：{profileCount} 个</Typography.Text>
             <Typography.Text>表格数据：{batch.total_rows} 行</Typography.Text>
@@ -373,7 +381,11 @@ export function BatchesPage() {
           dataSource={batches.data ?? []}
           columns={[
             { title: "批次", dataIndex: "name" },
-            { title: "Provider", dataIndex: "provider_type" },
+            {
+              title: "指纹浏览器",
+              dataIndex: "provider_type",
+              render: (value: string) => providerNameByType.get(value) ?? value,
+            },
             { title: "总行数", dataIndex: "total_rows" },
             {
               title: "状态",

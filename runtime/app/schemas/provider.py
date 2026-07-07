@@ -34,6 +34,39 @@ class ProviderInfo(BaseModel):
     health: ProviderHealth
 
 
+class ProviderConfigField(BaseModel):
+    key: str
+    label: str
+    type: str = "text"
+    required: bool = False
+    secret: bool = False
+    placeholder: str | None = None
+    help_text: str | None = None
+    default_value: str | None = None
+
+
+class ProviderCredentialStatus(BaseModel):
+    configured: bool = False
+    masked_fields: dict[str, str] = Field(default_factory=dict)
+    missing_required_fields: list[str] = Field(default_factory=list)
+
+
+class ProviderConfig(BaseModel):
+    provider_type: str
+    fields: list[ProviderConfigField] = Field(default_factory=list)
+    values: dict[str, Any] = Field(default_factory=dict)
+    credential_status: ProviderCredentialStatus = Field(default_factory=ProviderCredentialStatus)
+
+
+class ProviderConfigUpdate(BaseModel):
+    values: dict[str, Any] = Field(default_factory=dict)
+
+
+class ProviderConfigSecret(BaseModel):
+    key: str
+    value: str
+
+
 class ProviderProfileRef(BaseModel):
     provider_type: str
     external_profile_id: str

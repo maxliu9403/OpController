@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from app.schemas.provider import (
+    ProviderConfigField,
     ProfileSyncResult,
     ProviderCapability,
     ProviderGroupRef,
@@ -35,6 +36,12 @@ class BrowserProvider(ABC):
             capabilities=self.capabilities,
             health=await self.health_check(),
         )
+
+    def config_fields(self) -> list[ProviderConfigField]:
+        return []
+
+    def default_config_values(self) -> dict[str, Any]:
+        return {}
 
     @abstractmethod
     async def sync_profiles(self) -> ProfileSyncResult:

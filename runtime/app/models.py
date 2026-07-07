@@ -81,6 +81,13 @@ class ProviderScopeRecord(TimestampMixin, Base):
     exclude_profile_ids: Mapped[list[str] | None] = mapped_column(JSON, default=list)
 
 
+class ProviderConfigRecord(TimestampMixin, Base):
+    __tablename__ = "provider_configs"
+
+    provider_type: Mapped[str] = mapped_column(String(50), primary_key=True)
+    values_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=dict)
+
+
 class WorkflowFolderRecord(TimestampMixin, Base):
     __tablename__ = "workflow_folders"
 

@@ -15,7 +15,7 @@ from app.db import get_session
 from app.runtime_context import RuntimeContext
 from app.schemas.batch import StartBatchRequest
 from app.schemas.preview import LocatorLivePreviewRequest, LocatorPickOnceRequest, StepLivePreviewRequest, WorkflowDryRunRequest
-from app.schemas.provider import ProviderScope
+from app.schemas.provider import ProviderConfigUpdate, ProviderScope
 from app.schemas.schedule import ScheduleDefinition
 
 router = APIRouter(prefix="/local/v1")
@@ -77,7 +77,53 @@ async def sync_profiles(
     session: DbSession,
     runtime: Annotated[RuntimeContext, Depends(get_runtime)],
 ):
-    return await runtime.provider_service.sync_profiles(session, provider_type)
+    try:
+        return await runtime.provider_service.sync_profiles(session, provider_type)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"未知指纹浏览器 Provider：{provider_type}") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"同步 Profile 失败：{exc}") from exc
+
+
+@router.get("/providers/{provider_type}/config")
+async def get_provider_config(
+    provider_type: str,
+    runtime: Annotated[RuntimeContext, Depends(get_runtime)],
+):
+    return await runtime.provider_service.get_config(provider_type)
+
+
+@router.get("/providers/{provider_type}/config/secrets/{key}")
+async def reveal_provider_config_secret(
+    provider_type: str,
+    key: str,
+    runtime: Annotated[RuntimeContext, Depends(get_runtime)],
+):
+    try:
+        return await runtime.provider_service.reveal_config_secret(provider_type, key)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"未知指纹浏览器 Provider：{provider_type}") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.put("/providers/{provider_type}/config")
+async def update_provider_config(
+    provider_type: str,
+    payload: ProviderConfigUpdate,
+    runtime: Annotated[RuntimeContext, Depends(get_runtime)],
+):
+    return await runtime.provider_service.save_config(provider_type, payload)
+
+
+@router.post("/providers/{provider_type}/health-check")
+async def provider_health_check(
+    provider_type: str,
+    runtime: Annotated[RuntimeContext, Depends(get_runtime)],
+):
+    return await runtime.provider_service.health_check(provider_type)
 
 
 @router.get("/providers/{provider_type}/groups")

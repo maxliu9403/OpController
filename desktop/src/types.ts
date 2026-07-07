@@ -27,6 +27,35 @@ export type ProviderInfo = {
   health: ProviderHealth;
 };
 
+export type ProviderConfigField = {
+  key: string;
+  label: string;
+  type: string;
+  required: boolean;
+  secret: boolean;
+  placeholder?: string | null;
+  help_text?: string | null;
+  default_value?: string | null;
+};
+
+export type ProviderCredentialStatus = {
+  configured: boolean;
+  masked_fields: Record<string, string>;
+  missing_required_fields: string[];
+};
+
+export type ProviderConfig = {
+  provider_type: string;
+  fields: ProviderConfigField[];
+  values: Record<string, unknown>;
+  credential_status: ProviderCredentialStatus;
+};
+
+export type ProviderConfigSecret = {
+  key: string;
+  value: string;
+};
+
 export type ProviderSessionRecord = {
   provider_type: string;
   provider_profile_id: string;

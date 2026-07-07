@@ -7,6 +7,9 @@ import type {
   LocatorPickResult,
   ProfileRecord,
   ProviderGroupRecord,
+  ProviderConfig,
+  ProviderConfigSecret,
+  ProviderHealth,
   ProviderInfo,
   ProviderScope,
   ProviderSessionRecord,
@@ -217,6 +220,16 @@ export const api = {
   health: () => request<{ status: string }>("/health"),
   systemCheck: () => request<SystemCheckResult>("/system/check"),
   listProviders: () => request<ProviderInfo[]>("/providers"),
+  getProviderConfig: (providerType: string) => request<ProviderConfig>(`/providers/${providerType}/config`),
+  getProviderConfigSecret: (providerType: string, key: string) =>
+    request<ProviderConfigSecret>(`/providers/${providerType}/config/secrets/${encodeURIComponent(key)}`),
+  updateProviderConfig: (providerType: string, values: Record<string, unknown>) =>
+    request<ProviderConfig>(`/providers/${providerType}/config`, {
+      method: "PUT",
+      body: JSON.stringify({ values }),
+    }),
+  providerHealthCheck: (providerType: string) =>
+    request<ProviderHealth>(`/providers/${providerType}/health-check`, { method: "POST" }),
   syncProfiles: (providerType: string) =>
     request(`/providers/${providerType}/profiles/sync`, { method: "POST" }),
   listProviderSessions: (providerType: string) =>
