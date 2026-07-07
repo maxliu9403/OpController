@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import pytest
 
+from app.config import settings
+from app.services.batch_service import BatchService
 from app.services.resilience import DynamicSlotController, FailureCategory, FailureClassifier, RetryPolicy, RetryScope
 
 
@@ -59,6 +61,28 @@ def test_dynamic_slot_controller_downshifts_and_recovers() -> None:
     assert recovery_snapshot is not None
     assert recovery_snapshot["current_slots"] == 4
     assert recovery_snapshot["reason"] == "success_recovery"
+
+
+def test_batch_slot_controller_starts_with_requested_slots_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "dynamic_slots_enabled", True)
+    monkeypatch.setattr(settings, "dynamic_slots_warmup_enabled", False)
+    monkeypatch.setattr(settings, "dynamic_slots_initial_limit", 2)
+
+    controller = BatchService.__new__(BatchService)._build_slot_controller(6)
+
+    assert controller.target_slots == 6
+    assert controller.current_slots == 6
+
+
+def test_batch_slot_controller_can_opt_into_warmup(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "dynamic_slots_enabled", True)
+    monkeypatch.setattr(settings, "dynamic_slots_warmup_enabled", True)
+    monkeypatch.setattr(settings, "dynamic_slots_initial_limit", 2)
+
+    controller = BatchService.__new__(BatchService)._build_slot_controller(6)
+
+    assert controller.target_slots == 6
+    assert controller.current_slots == 2
 
 
 @pytest.mark.asyncio

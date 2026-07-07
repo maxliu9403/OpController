@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import logging
 import random
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from string import Template
 from typing import Any, Awaitable, Callable
+from uuid import uuid4
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -20,6 +23,9 @@ from app.schemas.preview import LocatorLivePreviewResult, StepLivePreviewResult,
 from app.schemas.workflow import LocatorSpec, WorkflowDefinition, WorkflowStep
 from app.services.monitor_service import MonitorService
 from app.services.resilience import RetryDecision, RetryPlanner, RetryPolicy, RetryScope
+
+
+logger = logging.getLogger(__name__)
 
 
 class ExecutionError(RuntimeError):
@@ -42,6 +48,21 @@ class ExecutionContext:
 
 
 class ExecutionService:
+    STEP_HANDLER_NAMES = {
+        "goto": "_handle_goto",
+        "click": "_handle_click",
+        "fill": "_handle_fill",
+        "select": "_handle_select",
+        "hover": "_handle_hover",
+        "wait_visible": "_handle_wait_visible",
+        "wait": "_handle_wait",
+        "wait_text": "_handle_wait_text",
+        "scroll": "_handle_scroll",
+        "sleep": "_handle_sleep",
+        "screenshot": "_handle_screenshot",
+        "extract_text": "_handle_extract_text",
+        "for_each": "_handle_for_each",
+    }
     HUMAN_STEP_PAUSE_RANGE = (0.42, 1.25)
     HUMAN_AFTER_STEP_PAUSE_RANGE = (0.65, 1.80)
     HUMAN_TARGET_PAUSE_RANGE = (0.32, 0.88)
@@ -176,31 +197,46 @@ class ExecutionService:
             try:
                 if page:
                     await page.close()
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("failed to close playwright page", extra={"task_run_id": task_run_id, "error": str(exc)})
             try:
                 if browser:
                     await browser.close()
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("failed to close playwright browser", extra={"task_run_id": task_run_id, "error": str(exc)})
             try:
                 if playwright:
                     await playwright.stop()
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("failed to stop playwright", extra={"task_run_id": task_run_id, "error": str(exc)})
             if provider_profile_id:
                 try:
                     await asyncio.wait_for(
                         provider.close_profile(provider_profile_id),
                         timeout=settings.provider_close_timeout_sec,
                     )
-                except Exception:  # noqa: BLE001
-                    pass
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "failed to close provider profile",
+                        extra={
+                            "task_run_id": task_run_id,
+                            "provider_type": provider.provider_type,
+                            "provider_profile_id": provider_profile_id,
+                            "error": str(exc),
+                        },
+                    )
                 if session_opened and on_session_closed:
                     try:
                         await on_session_closed(task_run_id, provider_profile_id)
-                    except Exception:  # noqa: BLE001
-                        pass
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(
+                            "provider session close callback failed",
+                            extra={
+                                "task_run_id": task_run_id,
+                                "provider_profile_id": provider_profile_id,
+                                "error": str(exc),
+                            },
+                        )
 
     async def _open_provider_session(
         self,
@@ -413,13 +449,13 @@ class ExecutionService:
             try:
                 if browser:
                     await browser.close()
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("failed to close preview browser", extra={"step_id": step.id, "error": str(exc)})
             try:
                 if playwright:
                     await playwright.stop()
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("failed to stop preview playwright", extra={"step_id": step.id, "error": str(exc)})
             raise
 
     async def _attach_browser_with_retry(
@@ -502,13 +538,13 @@ class ExecutionService:
             try:
                 if browser:
                     await browser.close()
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("failed to close workflow preview browser", extra={"error": str(exc)})
             try:
                 if playwright:
                     await playwright.stop()
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("failed to stop workflow preview playwright", extra={"error": str(exc)})
 
     async def pick_locator_once(
         self,
@@ -913,10 +949,7 @@ class ExecutionService:
                 if locator
                 else {"selector_used": None, "match_count": 0, "matched_texts": []}
             )
-            handler_name = f"_handle_{step.type.replace('-', '_')}"
-            handler = getattr(self, handler_name, None)
-            if not handler:
-                raise ExecutionError("step_not_supported", f"Step type '{step.type}' cannot be previewed yet")
+            handler = self._handler_for_step(step, preview=True)
             await self._human_before_step(step)
             await handler(step, context)
             await self._human_after_step(step)
@@ -1066,10 +1099,7 @@ class ExecutionService:
                 except ExecutionError as exc:
                     preview_error = {"error_code": exc.code, "message": exc.message}
 
-            handler_name = f"_handle_{step.type.replace('-', '_')}"
-            handler = getattr(self, handler_name, None)
-            if not handler:
-                raise ExecutionError("step_not_supported", f"Step type '{step.type}' cannot be previewed yet")
+            handler = self._handler_for_step(step, preview=True)
             await self._human_before_step(step)
             await handler(step, context)
             await self._human_after_step(step)
@@ -1134,6 +1164,16 @@ class ExecutionService:
         except Exception:  # noqa: BLE001
             return None
 
+    def _handler_for_step(self, step: WorkflowStep, *, preview: bool) -> Callable[[WorkflowStep, ExecutionContext], Awaitable[None]]:
+        handler_name = self.STEP_HANDLER_NAMES.get(step.type)
+        if not handler_name:
+            action = "previewed" if preview else "executed"
+            raise ExecutionError("step_not_supported", f"Step type '{step.type}' cannot be {action} yet")
+        handler = getattr(self, handler_name, None)
+        if not handler:
+            raise ExecutionError("step_not_supported", f"Step type '{step.type}' handler is not registered")
+        return handler
+
     async def _execute_step(
         self,
         task_run_id: str,
@@ -1142,10 +1182,7 @@ class ExecutionService:
     ) -> None:
         step_run_id = await self._create_step_run(task_run_id, step)
         try:
-            handler_name = f"_handle_{step.type.replace('-', '_')}"
-            handler = getattr(self, handler_name, None)
-            if not handler:
-                raise ExecutionError("step_not_supported", f"Step type '{step.type}' is not supported yet")
+            handler = self._handler_for_step(step, preview=False)
             await self._human_before_step(step)
             await handler(step, context)
             await self._human_after_step(step)
@@ -1265,8 +1302,8 @@ class ExecutionService:
             return None
         output_dir = settings.artifact_dir / "screenshots" / task_run_id
         output_dir.mkdir(parents=True, exist_ok=True)
-        screenshot_path = output_dir / f"{step_id}.png"
-        await context.page.screenshot(path=str(screenshot_path), full_page=True)
+        screenshot_path = output_dir / self._artifact_file_name(step_id)
+        await context.page.screenshot(path=str(screenshot_path), full_page=settings.failure_screenshot_full_page)
         return str(screenshot_path)
 
     def _locator_summary(self, step: WorkflowStep, workflow: WorkflowDefinition) -> dict[str, Any]:
@@ -1745,7 +1782,16 @@ class ExecutionService:
                     "skip_reason": "random_many locator matched no elements",
                 }
                 return
-            click_count = min(max(step.random_click_count, 1), count)
+            if count > settings.random_click_max_match_count:
+                raise ExecutionError(
+                    "random_click_too_broad",
+                    (
+                        f"随机点击命中 {count} 个元素，超过安全阈值 "
+                        f"{settings.random_click_max_match_count}。请缩小定位范围或增加列表行上下文"
+                    ),
+                )
+            requested_count = min(max(step.random_click_count, 1), settings.random_click_max_count)
+            click_count = min(requested_count, count)
             clicked_indices = self._random_indices(total=count, requested=click_count)
             click_results: list[dict[str, Any]] = []
             for index in clicked_indices:
@@ -1763,6 +1809,8 @@ class ExecutionService:
                 "requested_count": step.random_click_count,
                 "clicked_count": len(click_results),
                 "clicked_indices": clicked_indices[: len(click_results)],
+                "safe_max_count": settings.random_click_max_count,
+                "capped_by_safety": step.random_click_count > settings.random_click_max_count,
                 "click_hold_ms": [result.get("click_hold_ms") for result in click_results],
                 "click_results": click_results,
                 "locator_resolution": context.variables.get("_last_locator_resolution", {}),
@@ -2201,8 +2249,8 @@ class ExecutionService:
     async def _handle_screenshot(self, step: WorkflowStep, context: ExecutionContext) -> None:
         output_dir = settings.artifact_dir / "screenshots" / "manual"
         output_dir.mkdir(parents=True, exist_ok=True)
-        target = output_dir / f"{step.id}.png"
-        await context.page.screenshot(path=str(target), full_page=True)
+        target = output_dir / self._artifact_file_name(step.id)
+        await context.page.screenshot(path=str(target), full_page=settings.manual_screenshot_full_page)
         if step.save_as:
             context.variables[step.save_as] = str(target)
 
@@ -2529,5 +2577,15 @@ class ExecutionService:
 
     def _latest_manual_preview_artifact(self, step_id: str) -> str | None:
         output_dir = settings.artifact_dir / "screenshots" / "manual"
-        target = output_dir / f"{step_id}.png"
-        return str(target) if target.exists() else None
+        safe_prefix = self._safe_artifact_part(step_id)
+        matches = sorted(output_dir.glob(f"{safe_prefix}_*.png"), key=lambda path: path.stat().st_mtime, reverse=True)
+        return str(matches[0]) if matches else None
+
+    @classmethod
+    def _artifact_file_name(cls, step_id: str) -> str:
+        return f"{cls._safe_artifact_part(step_id)}_{datetime.utcnow().strftime('%Y%m%d%H%M%S%f')}_{uuid4().hex[:8]}.png"
+
+    @staticmethod
+    def _safe_artifact_part(value: str) -> str:
+        cleaned = re.sub(r"[^a-zA-Z0-9_.-]+", "_", value).strip("._")
+        return cleaned[:80] or "step"

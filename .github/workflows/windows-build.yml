@@ -2,6 +2,17 @@ name: Build Windows
 
 on:
   workflow_dispatch:
+    inputs:
+      run_tests:
+        description: "打包前运行 runtime 测试"
+        required: false
+        default: true
+        type: boolean
+      clean:
+        description: "构建前清理旧产物"
+        required: false
+        default: false
+        type: boolean
   push:
     branches:
       - main
@@ -11,12 +22,22 @@ on:
       - "shared/**"
       - "package.json"
       - "package-lock.json"
+      - "desktop/package.json"
+      - "desktop/src-tauri/**"
       - ".github/workflows/windows-build.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-windows-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   windows:
     name: Windows x64
     runs-on: windows-latest
+    timeout-minutes: 90
 
     steps:
       - name: Checkout
@@ -27,28 +48,79 @@ jobs:
         with:
           node-version: "20"
           cache: "npm"
+          cache-dependency-path: package-lock.json
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: "pip"
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop/src-tauri/target
+          key: windows-cargo-${{ hashFiles('desktop/src-tauri/Cargo.lock') }}
+          restore-keys: |
+            windows-cargo-
+
+      - name: Clean build outputs
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.clean }}
+        shell: pwsh
+        run: |
+          Remove-Item desktop\dist -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item runtime\build -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item runtime\dist -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item desktop\src-tauri\target\release\bundle -Recurse -Force -ErrorAction SilentlyContinue
 
       - name: Install JavaScript dependencies
         run: npm ci
 
       - name: Install Python runtime dependencies
         shell: pwsh
+        working-directory: runtime
         run: |
-          py -3.12 -m venv runtime\.venv
-          runtime\.venv\Scripts\python.exe -m pip install --upgrade pip
-          runtime\.venv\Scripts\python.exe -m pip install -e "runtime[dev]"
-          runtime\.venv\Scripts\python.exe -m playwright install chromium
+          py -3.12 -m venv .venv
+          .\.venv\Scripts\python.exe -m pip install --upgrade pip setuptools wheel
+          .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+          .\.venv\Scripts\python.exe -m playwright install chromium
+
+      - name: Run runtime tests
+        if: ${{ github.event_name == 'push' || inputs.run_tests }}
+        shell: pwsh
+        working-directory: runtime
+        run: .\.venv\Scripts\python.exe -m pytest
 
       - name: Build Windows desktop bundles
+        shell: pwsh
         run: npm run build:win
+
+      - name: Summarize artifacts
+        if: always()
+        shell: pwsh
+        run: |
+          $summary = $env:GITHUB_STEP_SUMMARY
+          "## OpController Windows Build" | Out-File -FilePath $summary -Append
+          "" | Out-File -FilePath $summary -Append
+          $files = @()
+          $files += Get-ChildItem desktop\src-tauri\target\release\bundle -Recurse -Filter *.exe -ErrorAction SilentlyContinue
+          $files += Get-ChildItem desktop\src-tauri\target\release\bundle -Recurse -Filter *.msi -ErrorAction SilentlyContinue
+          if (-not $files.Count) {
+            "No .exe/.msi artifacts were found." | Out-File -FilePath $summary -Append
+            exit 0
+          }
+          "| File | Size |" | Out-File -FilePath $summary -Append
+          "| --- | ---: |" | Out-File -FilePath $summary -Append
+          foreach ($file in $files) {
+            $size = [Math]::Round($file.Length / 1MB, 2)
+            "| ``$($file.FullName)`` | $size MB |" | Out-File -FilePath $summary -Append
+          }
 
       - name: Upload Windows bundles
         uses: actions/upload-artifact@v4

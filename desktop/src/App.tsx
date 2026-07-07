@@ -1,30 +1,35 @@
 import { ConfigProvider, theme } from "antd";
 import zhCN from "antd/locale/zh_CN";
-import { useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState, type ReactNode } from "react";
 import { createBrowserRouter, RouterProvider } from "react-router-dom";
 import { AppShell } from "./components/AppShell";
 import { RuntimeBootstrap } from "./components/RuntimeBootstrap";
-import { BatchesPage } from "./pages/BatchesPage";
-import { DashboardPage } from "./pages/DashboardPage";
-import { MonitorPage } from "./pages/MonitorPage";
-import { ProvidersPage } from "./pages/ProvidersPage";
-import { ResultsPage } from "./pages/ResultsPage";
-import { SchedulesPage } from "./pages/SchedulesPage";
-import { WorkflowsPage } from "./pages/WorkflowsPage";
 import { ThemeModeContext, type ThemeMode } from "./themeMode";
+
+const DashboardPage = lazy(() => import("./pages/DashboardPage").then((module) => ({ default: module.DashboardPage })));
+const ProvidersPage = lazy(() => import("./pages/ProvidersPage").then((module) => ({ default: module.ProvidersPage })));
+const WorkflowsPage = lazy(() => import("./pages/WorkflowsPage").then((module) => ({ default: module.WorkflowsPage })));
+const BatchesPage = lazy(() => import("./pages/BatchesPage").then((module) => ({ default: module.BatchesPage })));
+const MonitorPage = lazy(() => import("./pages/MonitorPage").then((module) => ({ default: module.MonitorPage })));
+const SchedulesPage = lazy(() => import("./pages/SchedulesPage").then((module) => ({ default: module.SchedulesPage })));
+const ResultsPage = lazy(() => import("./pages/ResultsPage").then((module) => ({ default: module.ResultsPage })));
+
+function LazyPage({ children }: { children: ReactNode }) {
+  return <Suspense fallback={<div className="page-loading">页面加载中...</div>}>{children}</Suspense>;
+}
 
 const router = createBrowserRouter([
   {
     path: "/",
     element: <AppShell />,
     children: [
-      { index: true, element: <DashboardPage /> },
-      { path: "providers", element: <ProvidersPage /> },
-      { path: "workflows", element: <WorkflowsPage /> },
-      { path: "batches", element: <BatchesPage /> },
-      { path: "monitor", element: <MonitorPage /> },
-      { path: "schedules", element: <SchedulesPage /> },
-      { path: "results", element: <ResultsPage /> },
+      { index: true, element: <LazyPage><DashboardPage /></LazyPage> },
+      { path: "providers", element: <LazyPage><ProvidersPage /></LazyPage> },
+      { path: "workflows", element: <LazyPage><WorkflowsPage /></LazyPage> },
+      { path: "batches", element: <LazyPage><BatchesPage /></LazyPage> },
+      { path: "monitor", element: <LazyPage><MonitorPage /></LazyPage> },
+      { path: "schedules", element: <LazyPage><SchedulesPage /></LazyPage> },
+      { path: "results", element: <LazyPage><ResultsPage /></LazyPage> },
     ],
   },
 ]);

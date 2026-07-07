@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import csv
 import io
+import logging
 import math
 import platform
 import re
@@ -47,6 +48,9 @@ from app.services.monitor_service import MonitorService
 from app.services.provider_service import ProviderService
 from app.services.resilience import DynamicSlotController
 from app.services.workflow_service import WorkflowService
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -432,11 +436,19 @@ class BatchService:
                 "请确认指纹浏览器已启动且 Local API 可访问"
             )
             details = {"timeout": True}
+            logger.warning(
+                "provider health check timed out before batch run",
+                extra={"batch_id": batch_id, "provider_type": provider_type},
+            )
             await self._publish_provider_health_failed(batch_id, provider_type, message, details)
             raise ProviderNotReadyError(provider_type, message, details) from exc
         except Exception as exc:  # noqa: BLE001
             message = f"{provider.display_name} 健康检查失败：{exc}"
             details = {"error": str(exc)}
+            logger.warning(
+                "provider health check failed before batch run",
+                extra={"batch_id": batch_id, "provider_type": provider_type, "error": str(exc)},
+            )
             await self._publish_provider_health_failed(batch_id, provider_type, message, details)
             raise ProviderNotReadyError(provider_type, message, details) from exc
 
@@ -446,6 +458,10 @@ class BatchService:
                 "请先启动对应指纹浏览器，并确认本地 API 端口配置正确后重试"
             )
             details = health.model_dump(mode="json")
+            logger.warning(
+                "provider is not ready before batch run",
+                extra={"batch_id": batch_id, "provider_type": provider_type, "health_message": health.message},
+            )
             await self._publish_provider_health_failed(batch_id, provider_type, message, details)
             raise ProviderNotReadyError(provider_type, message, details)
 
@@ -662,6 +678,10 @@ class BatchService:
                 except Exception as exc:  # noqa: BLE001
                     native_ok = False
                     native_error = str(exc)
+                    logger.warning(
+                        "provider native window layout failed; falling back to os layout",
+                        extra={"batch_id": batch_id, "provider_type": batch.provider_type, "error": native_error},
+                    )
                     await self._arrange_windows_macos(
                         sessions=sessions,
                         slot_limit=slot_limit,
@@ -712,6 +732,10 @@ class BatchService:
                     await self._record_slot_outcome(batch_id, task_run_id, slot_controller)
                     await self.monitor.publish("batch.progress", {"batch_id": batch_id, "task_run_id": task_run_id})
                 except Exception as exc:  # noqa: BLE001
+                    logger.exception(
+                        "batch worker failed",
+                        extra={"batch_id": batch_id, "task_run_id": task_run_id, "slot_index": slot_index},
+                    )
                     await self._mark_task_worker_failed(task_run_id, exc)
                     await self._record_slot_outcome(batch_id, task_run_id, slot_controller)
                 finally:
@@ -735,7 +759,7 @@ class BatchService:
 
     def _build_slot_controller(self, slot_limit: int) -> DynamicSlotController:
         target_slots = max(1, slot_limit)
-        if settings.dynamic_slots_enabled:
+        if settings.dynamic_slots_enabled and settings.dynamic_slots_warmup_enabled:
             initial_slots = min(target_slots, max(1, settings.dynamic_slots_initial_limit))
         else:
             initial_slots = target_slots
@@ -920,7 +944,7 @@ class BatchService:
             screen_bounds=screen_bounds,
         )
         try:
-            await asyncio.to_thread(
+            result = await asyncio.to_thread(
                 subprocess.run,
                 ["osascript", "-e", script],
                 capture_output=True,
@@ -928,8 +952,14 @@ class BatchService:
                 timeout=settings.window_layout_timeout_sec,
                 check=False,
             )
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("macos window layout script failed", extra={"error": str(exc), "pids": pids})
             return
+        if result.returncode != 0:
+            logger.warning(
+                "macos window layout script returned non-zero status",
+                extra={"returncode": result.returncode, "stderr": result.stderr.strip(), "pids": pids},
+            )
 
     @staticmethod
     def _build_macos_layout_script(
@@ -1009,9 +1039,14 @@ end tell
                 timeout=settings.window_layout_timeout_sec,
                 check=False,
             )
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("failed to read macos screen bounds", extra={"error": str(exc)})
             return None
         if result.returncode != 0:
+            logger.warning(
+                "read macos screen bounds returned non-zero status",
+                extra={"returncode": result.returncode, "stderr": result.stderr.strip()},
+            )
             return None
         numbers = [int(item) for item in re.findall(r"-?\d+", result.stdout)]
         if len(numbers) < 4:

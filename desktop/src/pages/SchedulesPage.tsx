@@ -6,7 +6,6 @@ import {
   Input,
   InputNumber,
   Modal,
-  Popconfirm,
   Radio,
   Select,
   Space,
@@ -24,10 +23,12 @@ import { Download, Pencil, Trash2, UploadCloud } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
 import { SectionCard } from "../components/SectionCard";
+import { StatusBadge } from "../components/StatusBadge";
+import { TableActionMenu } from "../components/TableActionMenu";
 import { usePolling } from "../hooks/usePolling";
 import type { ProfileRecord, ProviderGroupRecord, ScheduleRecord, WorkflowRecord } from "../types";
 import type { InputProfileMappingValidation } from "../types";
-import { statusColor, statusLabel } from "../utils/status";
+import { downloadBlob, safeFileName } from "../utils/files";
 
 type ScheduleInputRow = {
   id: string;
@@ -162,25 +163,6 @@ function scheduleInitialValues(record: ScheduleRecord) {
     weekly_days: ["mon"],
     max_concurrency: record.max_concurrency,
   };
-}
-
-function safeFileName(value: string) {
-  return value
-    .trim()
-    .replace(/[\\/:*?"<>|]/g, "-")
-    .replace(/\s+/g, "_")
-    .slice(0, 80) || "profile_input_template";
-}
-
-function downloadBlob(fileName: string, blob: Blob) {
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = fileName;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
 }
 
 function profileGroupId(profile: ProfileRecord) {
@@ -373,7 +355,7 @@ export function SchedulesPage() {
     }
     try {
       const blob = await api.downloadWorkflowInputTemplate(selectedWorkflowId);
-      downloadBlob(`${safeFileName(selectedWorkflow.name)}_流程参数模板.xlsx`, blob);
+      downloadBlob(`${safeFileName(selectedWorkflow.name, "profile_input_template")}_流程参数模板.xlsx`, blob);
       message.success("模板已导出");
     } catch (cause) {
       message.error(cause instanceof Error ? cause.message : "导出模板失败");
@@ -562,6 +544,17 @@ export function SchedulesPage() {
     }
   };
 
+  const confirmDeleteSchedule = (record: ScheduleRecord) => {
+    Modal.confirm({
+      title: "删除这个定时任务？",
+      content: "删除后不会再自动触发，已生成的历史批次不会删除。",
+      okText: "删除",
+      cancelText: "取消",
+      okButtonProps: { danger: true },
+      onOk: () => void handleDeleteSchedule(record),
+    });
+  };
+
   if (providers.loading || workflows.loading || schedules.loading) {
     return <Spin size="large" />;
   }
@@ -721,7 +714,7 @@ export function SchedulesPage() {
             {
               title: "状态",
               dataIndex: "status",
-              render: (value: string) => <Tag color={statusColor(value)}>{statusLabel(value)}</Tag>,
+              render: (value: string) => <StatusBadge status={value} />,
             },
             {
               title: "槽位",
@@ -758,37 +751,31 @@ export function SchedulesPage() {
             {
               title: "操作",
               fixed: "right",
-              width: 220,
+              width: 150,
               render: (_value: unknown, record: ScheduleRecord) => (
-                <Space size={6} wrap>
-                  <Button
-                    size="small"
-                    icon={<Pencil size={14} />}
-                    loading={scheduleActionLoadingId === record.id}
-                    onClick={() => openEditSchedule(record)}
-                  >
-                    编辑
-                  </Button>
-                  <Button
-                    size="small"
-                    loading={scheduleActionLoadingId === record.id}
-                    onClick={() => void handleToggleSchedule(record)}
-                  >
-                    {record.status === "enabled" ? "停用" : "启用"}
-                  </Button>
-                  <Popconfirm
-                    title="删除这个定时任务？"
-                    description="删除后不会再自动触发，已生成的历史批次不会删除。"
-                    okText="删除"
-                    cancelText="取消"
-                    okButtonProps={{ danger: true }}
-                    onConfirm={() => void handleDeleteSchedule(record)}
-                  >
-                    <Button size="small" danger icon={<Trash2 size={14} />} loading={scheduleActionLoadingId === record.id}>
-                      删除
-                    </Button>
-                  </Popconfirm>
-                </Space>
+                <TableActionMenu
+                  loading={scheduleActionLoadingId === record.id}
+                  primary={{
+                    key: "edit",
+                    label: "编辑",
+                    icon: <Pencil size={14} />,
+                    onClick: () => openEditSchedule(record),
+                  }}
+                  actions={[
+                    {
+                      key: "toggle",
+                      label: record.status === "enabled" ? "停用" : "启用",
+                      onClick: () => void handleToggleSchedule(record),
+                    },
+                    {
+                      key: "delete",
+                      label: "删除",
+                      icon: <Trash2 size={14} />,
+                      danger: true,
+                      onClick: () => confirmDeleteSchedule(record),
+                    },
+                  ]}
+                />
               ),
             },
           ]}

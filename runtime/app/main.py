@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from app.api import create_app
 from app.config import settings
 from app.db import SessionLocal, init_db
+from app.logging_setup import configure_logging
 
 
 def _repo_root() -> Path:
@@ -20,6 +21,7 @@ def _repo_root() -> Path:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    configure_logging()
     runtime = app.state.runtime
     runtime.system_service.ensure_directories()
     await init_db()
@@ -30,6 +32,7 @@ async def lifespan(app: FastAPI):
     await runtime.schedule_service.load_existing()
     yield
     await runtime.schedule_service.stop()
+    await runtime.aclose()
 
 
 app = create_app(_repo_root(), lifespan=lifespan)

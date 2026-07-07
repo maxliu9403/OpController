@@ -296,7 +296,45 @@ desktop/src-tauri/target/release/bundle/macos/OpController.app
 
 Windows 包必须在 Windows 环境构建。原因是本项目包含 Python sidecar，PyInstaller 只能为当前操作系统生成可执行文件；在 macOS 上不能直接产出可运行的 Windows runtime。
 
-在 Windows 上首次准备环境：
+如果是一台全新的 Windows 电脑，推荐直接使用一键打包脚本。脚本会优先通过 `winget` 安装 Node.js、Python 3.12、Rust、WebView2 Runtime 和 Visual Studio Build Tools，然后自动安装项目依赖并打包：
+
+```powershell
+.\scripts\package-windows.cmd
+```
+
+建议在“以管理员身份运行”的 PowerShell 或 Windows Terminal 中执行，避免 Visual Studio Build Tools 安装过程被权限拦截。
+
+也可以直接运行 PowerShell 版本：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\package-windows.ps1
+```
+
+常用参数：
+
+```powershell
+# 清理旧产物后重新完整打包
+.\scripts\package-windows.cmd -Clean
+
+# 打包前额外运行 runtime 测试
+.\scripts\package-windows.cmd -RunTests
+
+# 已手动安装系统依赖时，跳过 winget 安装检查
+.\scripts\package-windows.cmd -SkipPrerequisites
+
+# 网络环境不方便下载 Playwright Chromium 时跳过
+.\scripts\package-windows.cmd -SkipPlaywrightInstall
+```
+
+脚本日志会写入：
+
+```text
+outputs/logs/package-windows-*.log
+```
+
+如果 `winget` 不存在，或 Visual Studio Build Tools 安装后当前终端仍无法识别 C++ 工具链，请重启 PowerShell 后重新执行脚本。
+
+手动准备环境的命令如下：
 
 ```powershell
 npm install
@@ -308,7 +346,7 @@ python -m playwright install chromium
 cd ..
 ```
 
-之后一键构建：
+环境已准备好之后，也可以只执行项目内构建命令：
 
 ```powershell
 npm run build:win
@@ -327,7 +365,35 @@ desktop/src-tauri/target/release/bundle/nsis/*.exe
 desktop/src-tauri/target/release/bundle/msi/*.msi
 ```
 
-也可以在 GitHub Actions 中手动触发 `Build Windows` workflow，完成后从 Artifact 下载 `OpController-windows-x64`。
+### 使用 GitHub Actions 构建 Windows 包
+
+如果不想在 Windows 电脑上安装构建环境，可以使用仓库内置的 GitHub Actions：
+
+1. 将代码提交并推送到 GitHub 仓库。
+2. 打开 GitHub 仓库页面，进入 `Actions`。
+3. 在左侧选择 `Build Windows`。
+4. 点击右侧 `Run workflow`。
+5. 保持默认参数，或勾选 `打包前运行 runtime 测试`。
+6. 等待 workflow 完成后，进入本次运行详情页。
+7. 在页面底部 `Artifacts` 下载 `OpController-windows-x64`。
+
+该 Artifact 内通常包含：
+
+```text
+*.exe
+*.msi
+```
+
+workflow 文件位于：
+
+```text
+.github/workflows/windows-build.yml
+```
+
+触发规则：
+
+- 手动触发：GitHub 页面 `Actions -> Build Windows -> Run workflow`。
+- 自动触发：推送到 `main` 且修改了 `desktop/`、`runtime/`、`shared/` 或 workflow 相关文件。
 
 ## 环境变量
 

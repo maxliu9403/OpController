@@ -10,6 +10,7 @@
     "build:desktop": "npm --workspace desktop run build",
     "build:mac:internal": "npm --workspace desktop run build:mac && bash scripts/package-mac-internal.sh",
     "build:win": "npm --workspace desktop run build:win",
+    "package:win": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-windows.ps1",
     "tauri:dev": "npm --workspace desktop run tauri:dev"
   }
 }

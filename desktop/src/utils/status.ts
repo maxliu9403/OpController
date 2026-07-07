@@ -10,6 +10,8 @@ const STATUS_LABELS: Record<string, string> = {
   closing: "关闭窗口",
   completed: "已完成",
   succeeded: "成功",
+  success: "成功",
+  partial: "部分成功",
   failed: "失败",
   error: "错误",
   cancelled: "已取消",
@@ -21,6 +23,14 @@ const STATUS_LABELS: Record<string, string> = {
   disabled: "停用",
   healthy: "正常",
   unhealthy: "异常",
+  configured: "已配置",
+  needs_config: "需要配置",
+  not_required: "无需配置",
+  editable: "可编辑",
+  editing: "编排中",
+  locked: "已锁定",
+  attachable: "可连接",
+  unbound: "未关联",
 };
 
 const STATUS_COLORS: Record<string, StatusTone> = {
@@ -33,6 +43,8 @@ const STATUS_COLORS: Record<string, StatusTone> = {
   closing: "cyan",
   completed: "green",
   succeeded: "green",
+  success: "green",
+  partial: "gold",
   failed: "red",
   error: "red",
   cancelled: "default",
@@ -44,6 +56,14 @@ const STATUS_COLORS: Record<string, StatusTone> = {
   disabled: "default",
   healthy: "green",
   unhealthy: "red",
+  configured: "green",
+  needs_config: "orange",
+  not_required: "default",
+  editable: "blue",
+  editing: "gold",
+  locked: "default",
+  attachable: "green",
+  unbound: "red",
 };
 
 export function statusLabel(status?: string | null) {

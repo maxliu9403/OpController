@@ -32,6 +32,9 @@ class IxBrowserProvider(BrowserProvider):
         self._api_gate = asyncio.Semaphore(3)
         self._lifecycle_gate = asyncio.Semaphore(2)
 
+    async def aclose(self) -> None:
+        await self._client.aclose()
+
     @property
     def capabilities(self) -> ProviderCapability:
         return ProviderCapability(

@@ -5,9 +5,11 @@ import { useCallback, useMemo, useState } from "react";
 import { api } from "../api/client";
 import { MetricCard } from "../components/MetricCard";
 import { SectionCard } from "../components/SectionCard";
+import { StatusBadge } from "../components/StatusBadge";
 import { usePolling } from "../hooks/usePolling";
 import type { BatchDetail, BatchSummary } from "../types";
-import { batchResultLabel, statusColor, statusLabel } from "../utils/status";
+import { downloadTextFile, safeFileName } from "../utils/files";
+import { batchResultLabel, statusLabel } from "../utils/status";
 
 type BatchResultFilter = "all" | "success" | "partial" | "failed";
 type RowStatusFilter = "all" | "succeeded" | "failed" | "running" | "pending";
@@ -38,29 +40,9 @@ function rowStatusKind(status?: string | null): Exclude<RowStatusFilter, "all"> 
   return "pending";
 }
 
-function safeFileName(value: string) {
-  return value
-    .trim()
-    .replace(/[\\/:*?"<>|]/g, "-")
-    .replace(/\s+/g, "_")
-    .slice(0, 80) || "batch_results";
-}
-
 function csvCell(value: unknown) {
   const text = value === null || value === undefined ? "" : typeof value === "string" ? value : JSON.stringify(value);
   return `"${text.replace(/"/g, '""')}"`;
-}
-
-function downloadTextFile(fileName: string, content: string, type = "text/csv;charset=utf-8") {
-  const blob = new Blob([content], { type });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = fileName;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
 }
 
 function buildTaskRows(batch: BatchDetail | null) {
@@ -158,7 +140,7 @@ export function ResultsPage() {
         ].map(csvCell).join(","),
       ),
     ];
-    downloadTextFile(`${safeFileName(batchDetail.data.name)}_执行结果.csv`, lines.join("\n"));
+    downloadTextFile(`${safeFileName(batchDetail.data.name, "batch_results")}_执行结果.csv`, lines.join("\n"), "text/csv;charset=utf-8");
   };
 
   if (batches.loading || workflows.loading) {
@@ -236,9 +218,7 @@ export function ResultsPage() {
                   width: 110,
                   render: (_value: unknown, record: BatchSummary) => {
                     const kind = batchResultKind(record);
-                    const label = kind === "partial" ? "部分成功" : kind === "success" ? "成功" : kind === "failed" ? "失败" : statusLabel(record.status);
-                    const color = kind === "success" ? "green" : kind === "partial" ? "gold" : kind === "failed" ? "red" : statusColor(record.status);
-                    return <Tag color={color}>{label}</Tag>;
+                    return <StatusBadge status={kind === "running" ? record.status : kind} />;
                   },
                 },
                 {
@@ -310,7 +290,7 @@ export function ResultsPage() {
                     title: "状态",
                     dataIndex: "status",
                     width: 110,
-                    render: (value: string) => <Tag color={statusColor(value)}>{statusLabel(value)}</Tag>,
+                    render: (value: string) => <StatusBadge status={value} />,
                   },
                   {
                     title: "执行结果",

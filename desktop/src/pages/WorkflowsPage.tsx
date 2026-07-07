@@ -4,6 +4,8 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import YAML from "yaml";
 import { api } from "../api/client";
 import { SectionCard } from "../components/SectionCard";
+import { StatusBadge } from "../components/StatusBadge";
+import { TableActionMenu } from "../components/TableActionMenu";
 import {
   type LocatorPreview,
   type StepComposerValues,
@@ -11,7 +13,6 @@ import {
 } from "../components/WorkflowStepComposer";
 import { type WorkflowDraftStep, WorkflowWizard } from "../components/WorkflowWizard";
 import { usePolling } from "../hooks/usePolling";
-import { statusLabel } from "../utils/status";
 import type {
   LocatorPickResult,
   ProfileRecord,
@@ -24,6 +25,7 @@ import type {
   WorkflowFolderRecord,
   WorkflowRecord,
 } from "../types";
+import { downloadTextFile, safeFileName } from "../utils/files";
 
 const MonacoEditor = lazy(() => import("@monaco-editor/react"));
 
@@ -107,26 +109,6 @@ function rewriteWorkflowProvider(workflowYaml: string, providerType: string) {
   return YAML.stringify(parsed);
 }
 
-function safeFileName(value: string) {
-  return value
-    .trim()
-    .replace(/[\\/:*?"<>|]/g, "-")
-    .replace(/\s+/g, "_")
-    .slice(0, 80) || "workflow";
-}
-
-function downloadTextFile(fileName: string, content: string, type = "application/json") {
-  const blob = new Blob([content], { type });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = fileName;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
-}
-
 function requiresLocator(type: string) {
   return ["click", "fill", "select", "wait_visible", "wait", "extract_text", "for_each"].includes(type);
 }
@@ -158,16 +140,6 @@ function buildStepId(type: string, index: number) {
 
 function buildSelectorKey(type: string, index: number) {
   return `${type}_locator_${index}`;
-}
-
-function statusColor(status: string) {
-  if (status === "succeeded" || status === "completed") {
-    return "green";
-  }
-  if (status === "failed" || status === "error") {
-    return "red";
-  }
-  return "gold";
 }
 
 function isAmbiguousClickStep(step: WorkflowDryRunStepResult) {
@@ -1372,6 +1344,17 @@ export function WorkflowsPage() {
     }
   };
 
+  const confirmDeleteWorkflow = (workflow: WorkflowRecord) => {
+    Modal.confirm({
+      title: "删除这个流程？",
+      content: "如果流程已被历史批次或定时任务引用，系统会阻止删除。",
+      okText: "删除",
+      cancelText: "取消",
+      okButtonProps: { danger: true },
+      onOk: () => void handleDeleteWorkflow(workflow),
+    });
+  };
+
   const handleCancelDraft = () => {
     setActiveWorkflow(null);
     setCreatingWorkflow(false);
@@ -1404,7 +1387,7 @@ export function WorkflowsPage() {
       provider_type: providerType,
       workflow_yaml: workflowYaml,
     };
-    downloadTextFile(`${safeFileName(name)}.opflow.json`, JSON.stringify(bundle, null, 2));
+    downloadTextFile(`${safeFileName(name, "workflow")}.opflow.json`, JSON.stringify(bundle, null, 2), "application/json");
     message.success("流程已导出");
   };
 
@@ -1929,7 +1912,11 @@ export function WorkflowsPage() {
           const bindingStatus = workflowProfileBindingStatus(item);
           return (
             <Space direction="vertical" size={2} className="workflow-table-profile">
-              <Tag color={bindingStatus.color}>{bindingStatus.label}</Tag>
+              <StatusBadge
+                status={bindingStatus.usable ? "configured" : "unbound"}
+                tone={bindingStatus.usable && bindingStatus.profileCount === null ? "info" : undefined}
+                label={bindingStatus.label}
+              />
               <Typography.Text type="secondary">{bindingStatus.detail}</Typography.Text>
             </Space>
           );
@@ -1945,40 +1932,45 @@ export function WorkflowsPage() {
       {
         title: "操作",
         key: "actions",
-        width: 360,
+        width: 168,
         fixed: "right",
         render: (_, item) => (
-          <Space className="workflow-table-actions" size={[6, 6]} wrap>
-            <Button
-              size="small"
-              type={activeWorkflow?.id === item.id && editorMode === "editing" ? "default" : "primary"}
-              disabled={activeWorkflow?.id === item.id && editorMode === "editing"}
-              onClick={() => handleOpenWorkflow(item, "edit")}
-            >
-              {activeWorkflow?.id === item.id && editorMode === "editing" ? "编排中" : "编排"}
-            </Button>
-            <Button size="small" icon={<Link2 size={14} />} onClick={() => handleOpenProfileGroupModal(item)}>
-              Profile 组
-            </Button>
-            <Button size="small" icon={<Download size={14} />} onClick={() => handleExportWorkflow(item)}>
-              导出
-            </Button>
-            <Button size="small" icon={<Copy size={14} />} onClick={() => void handleDuplicateWorkflow(item)}>
-              复制
-            </Button>
-            <Popconfirm
-              title="删除这个流程？"
-              description="如果流程已被历史批次或定时任务引用，系统会阻止删除。"
-              okText="删除"
-              cancelText="取消"
-              okButtonProps={{ danger: true }}
-              onConfirm={() => void handleDeleteWorkflow(item)}
-            >
-              <Button size="small" danger icon={<Trash2 size={14} />}>
-                删除
-              </Button>
-            </Popconfirm>
-          </Space>
+          <TableActionMenu
+            loading={workflowActionLoadingId === item.id}
+            primary={{
+              key: "edit",
+              label: activeWorkflow?.id === item.id && editorMode === "editing" ? "编排中" : "编排",
+              disabled: activeWorkflow?.id === item.id && editorMode === "editing",
+              onClick: () => handleOpenWorkflow(item, "edit"),
+            }}
+            actions={[
+              {
+                key: "profile-groups",
+                label: "Profile 组",
+                icon: <Link2 size={14} />,
+                onClick: () => handleOpenProfileGroupModal(item),
+              },
+              {
+                key: "export",
+                label: "导出",
+                icon: <Download size={14} />,
+                onClick: () => handleExportWorkflow(item),
+              },
+              {
+                key: "duplicate",
+                label: "复制",
+                icon: <Copy size={14} />,
+                onClick: () => void handleDuplicateWorkflow(item),
+              },
+              {
+                key: "delete",
+                label: "删除",
+                icon: <Trash2 size={14} />,
+                danger: true,
+                onClick: () => confirmDeleteWorkflow(item),
+              },
+            ]}
+          />
         ),
       },
     ];
@@ -1991,7 +1983,7 @@ export function WorkflowsPage() {
             {selectedSession ? "已连接测试窗口" : "选择窗口并打开"}
           </Typography.Title>
         </div>
-        <Tag>{selectedSession ? "已就绪" : "未连接"}</Tag>
+        <StatusBadge status={selectedSession ? "attachable" : "unbound"} label={selectedSession ? "已就绪" : "未连接"} />
       </div>
       <Alert
         type={selectedSession ? "success" : "info"}
@@ -2658,9 +2650,10 @@ export function WorkflowsPage() {
               }
             />
             <Space wrap>
-              <Tag color={dryRunResult.success ? "green" : "red"}>
-                {dryRunResult.success ? "全部通过" : "存在失败"}
-              </Tag>
+              <StatusBadge
+                status={dryRunResult.success ? "success" : "failed"}
+                label={dryRunResult.success ? "全部通过" : "存在失败"}
+              />
               <Tag>成功 {dryRunResult.succeeded_steps}</Tag>
               <Tag color="red">失败 {dryRunResult.failed_steps}</Tag>
               <Tag>耗时 {dryRunResult.elapsed_ms}ms</Tag>
@@ -2714,7 +2707,7 @@ export function WorkflowsPage() {
                   title: "状态",
                   dataIndex: "status",
                   width: 110,
-                  render: (value: string) => <Tag color={statusColor(value)}>{statusLabel(value)}</Tag>,
+                  render: (value: string) => <StatusBadge status={value} />,
                 },
                 { title: "动作", dataIndex: "action_type", width: 120 },
                 { title: "耗时", dataIndex: "elapsed_ms", width: 110, render: (value: number) => `${value}ms` },

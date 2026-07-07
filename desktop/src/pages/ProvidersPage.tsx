@@ -3,6 +3,7 @@ import type { Key } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
 import { SectionCard } from "../components/SectionCard";
+import { StatusBadge } from "../components/StatusBadge";
 import { usePolling } from "../hooks/usePolling";
 import type { ProfileRecord, ProviderConfig, ProviderScope } from "../types";
 
@@ -57,12 +58,12 @@ const MASKED_SECRET = "********";
 
 function credentialStatusTag(config: ProviderConfig | null | undefined) {
   if (!config?.fields.length) {
-    return <Tag>无需额外配置</Tag>;
+    return <StatusBadge status="not_required" />;
   }
   if (config.credential_status.configured) {
-    return <Tag color="green">已配置</Tag>;
+    return <StatusBadge status="configured" />;
   }
-  return <Tag color="orange">需要配置</Tag>;
+  return <StatusBadge status="needs_config" />;
 }
 
 export function ProvidersPage() {
@@ -572,9 +573,13 @@ export function ProvidersPage() {
                 render: (_, item) => {
                   const result = evaluateDraftManagement(item, effectiveScope);
                   return (
-                    <Tag color={result.managed ? "green" : "default"}>
-                      {result.managed ? "已纳入管理" : "未纳入"} / {reasonLabel(result.reason)}
-                    </Tag>
+                    <Space direction="vertical" size={2}>
+                      <StatusBadge
+                        status={result.managed ? "configured" : "unbound"}
+                        label={result.managed ? "已纳入管理" : "未纳入"}
+                      />
+                      <Typography.Text type="secondary">{reasonLabel(result.reason)}</Typography.Text>
+                    </Space>
                   );
                 },
               },
@@ -582,7 +587,7 @@ export function ProvidersPage() {
                 title: "启用",
                 dataIndex: "enabled",
                 width: 100,
-                render: (value: boolean) => <Tag color={value ? "green" : "default"}>{value ? "Enabled" : "Disabled"}</Tag>,
+                render: (value: boolean) => <StatusBadge status={value ? "enabled" : "disabled"} />,
               },
             ]}
           />

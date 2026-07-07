@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     default_slot_limit: int = 6
     max_slot_limit: int = 10
     provider_health_timeout_sec: float = 5.0
+    provider_health_cache_ttl_sec: float = 30.0
     provider_open_timeout_sec: float = 60.0
     provider_close_timeout_sec: float = 15.0
     browser_attach_timeout_sec: float = 25.0
@@ -54,6 +55,7 @@ class Settings(BaseSettings):
     navigation_stability_timeout_sec: float = 5.0
     navigation_stability_required_ms: int = 900
     dynamic_slots_enabled: bool = True
+    dynamic_slots_warmup_enabled: bool = False
     dynamic_slots_initial_limit: int = 2
     dynamic_slots_min_limit: int = 1
     dynamic_slots_failure_rate_threshold: float = 0.3
@@ -70,6 +72,12 @@ class Settings(BaseSettings):
     window_layout_default_width: int = 500
     window_layout_default_height: int = 500
     window_layout_provider_deviation_px: int = 50
+    random_click_max_count: int = 5
+    random_click_max_match_count: int = 80
+    failure_screenshot_full_page: bool = False
+    manual_screenshot_full_page: bool = False
+    monitor_queue_maxsize: int = 1000
+    runtime_log_file_name: str = "runtime-app.log"
 
     @property
     def data_dir(self) -> Path:

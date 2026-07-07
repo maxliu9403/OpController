@@ -7,11 +7,13 @@ from app.config import settings
 from app.providers.registry import ProviderRegistry
 from app.schemas.common import HealthSummary
 from app.schemas.system import RuntimePathSummary, SystemCheckResult
+from app.services.provider_service import ProviderService
 
 
 class SystemService:
-    def __init__(self, registry: ProviderRegistry) -> None:
+    def __init__(self, registry: ProviderRegistry, provider_service: ProviderService | None = None) -> None:
         self.registry = registry
+        self.provider_service = provider_service
 
     def ensure_directories(self) -> None:
         for path in (
@@ -27,7 +29,11 @@ class SystemService:
 
     async def system_check(self) -> SystemCheckResult:
         self.ensure_directories()
-        providers = [await provider.describe() for provider in self.registry.list()]
+        providers = (
+            await self.provider_service.list_providers()
+            if self.provider_service
+            else [await provider.describe() for provider in self.registry.list()]
+        )
         return SystemCheckResult(
             app_name=settings.app_name,
             runtime_origin=f"http://{settings.host}:{settings.port}",

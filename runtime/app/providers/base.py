@@ -43,6 +43,9 @@ class BrowserProvider(ABC):
     def default_config_values(self) -> dict[str, Any]:
         return {}
 
+    async def aclose(self) -> None:
+        return None
+
     @abstractmethod
     async def sync_profiles(self) -> ProfileSyncResult:
         raise NotImplementedError

@@ -1,11 +1,38 @@
-import { Col, Empty, Row, Space, Spin, Table, Tag, Typography } from "antd";
+import { Col, Empty, Row, Space, Spin, Table, Typography } from "antd";
 import dayjs from "dayjs";
 import { useMemo } from "react";
 import { api } from "../api/client";
 import { MetricCard } from "../components/MetricCard";
+import { ProviderIcon } from "../components/ProviderIcon";
 import { SectionCard } from "../components/SectionCard";
+import { StatusBadge } from "../components/StatusBadge";
 import { usePolling } from "../hooks/usePolling";
-import { statusColor, statusLabel } from "../utils/status";
+import type { ProviderInfo } from "../types";
+
+const CAPABILITY_LABELS: Array<[keyof ProviderInfo["capabilities"], string]> = [
+  ["supports_profile_sync", "Profile 同步"],
+  ["supports_group_tag_sync", "分组同步"],
+  ["supports_window_arrange", "窗口平铺"],
+  ["supports_native_opened_list", "会话对账"],
+  ["supports_local_api_port_config", "端口配置"],
+  ["supports_cookie_read", "Cookie 读取"],
+];
+
+function providerApiText(provider: ProviderInfo) {
+  if (provider.health.api_base) {
+    return provider.health.api_base;
+  }
+  if (provider.default_port) {
+    return `本地端口 ${provider.default_port}`;
+  }
+  return "默认本地配置";
+}
+
+function providerCapabilityLabels(provider: ProviderInfo) {
+  return CAPABILITY_LABELS
+    .filter(([key]) => provider.capabilities[key])
+    .map(([, label]) => label);
+}
 
 export function DashboardPage() {
   const system = usePolling(api.systemCheck, { intervalMs: 15000, cacheKey: "system:check" });
@@ -22,7 +49,7 @@ export function DashboardPage() {
   }
 
   return (
-    <Space direction="vertical" size={24} style={{ width: "100%" }}>
+    <Space direction="vertical" size={24} style={{ width: "100%" }} className="dashboard-page">
       <SectionCard
         title="运行总览"
         subtitle="先看系统、Provider 与批次的健康度，再进入编排和复盘。"
@@ -45,21 +72,53 @@ export function DashboardPage() {
 
       <Row gutter={[24, 24]}>
         <Col xs={24} xl={12}>
-          <SectionCard title="Provider 体检" subtitle="桌面壳启动后先检查本地浏览器接入状态。">
+          <SectionCard
+            title="Provider 体检"
+            subtitle="桌面壳启动后先检查本地浏览器接入状态。"
+            extra={
+              <StatusBadge
+                status={activeProviders === (system.data?.providers.length ?? 0) ? "healthy" : "unhealthy"}
+                label={`${activeProviders}/${system.data?.providers.length ?? 0} 可用`}
+              />
+            }
+          >
             {system.data?.providers.length ? (
-              <Space direction="vertical" size={12} style={{ width: "100%" }}>
-                {system.data.providers.map((provider) => (
-                  <div key={provider.provider_type} className="provider-health-item">
-                    <div>
-                      <Typography.Title level={5}>{provider.display_name}</Typography.Title>
-                      <Typography.Text type="secondary">{provider.health.message}</Typography.Text>
-                    </div>
-                    <Tag color={provider.health.healthy ? "green" : "red"}>
-                      {provider.health.healthy ? "可用" : "不可用"}
-                    </Tag>
-                  </div>
-                ))}
-              </Space>
+              <div className="dashboard-provider-grid">
+                {system.data.providers.map((provider) => {
+                  const capabilityLabels = providerCapabilityLabels(provider);
+                  return (
+                    <article
+                      key={provider.provider_type}
+                      className={`dashboard-provider-card${provider.health.healthy ? " is-healthy" : " is-unhealthy"}`}
+                    >
+                      <div className="dashboard-provider-card__top">
+                        <ProviderIcon providerType={provider.provider_type} displayName={provider.display_name} />
+                        <div className="dashboard-provider-card__identity">
+                          <Typography.Title level={5}>{provider.display_name}</Typography.Title>
+                          <Typography.Text type="secondary">{provider.provider_type}</Typography.Text>
+                        </div>
+                        <StatusBadge
+                          status={provider.health.healthy ? "healthy" : "unhealthy"}
+                          label={provider.health.healthy ? "可用" : "不可用"}
+                        />
+                      </div>
+                      <Typography.Paragraph className="dashboard-provider-card__message">
+                        {provider.health.message}
+                      </Typography.Paragraph>
+                      <div className="dashboard-provider-card__meta">
+                        <span>接入地址</span>
+                        <strong>{providerApiText(provider)}</strong>
+                      </div>
+                      <div className="dashboard-provider-card__capabilities">
+                        {capabilityLabels.slice(0, 4).map((label) => (
+                          <span key={label}>{label}</span>
+                        ))}
+                        {capabilityLabels.length > 4 ? <span>+{capabilityLabels.length - 4}</span> : null}
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
             ) : (
               <Empty description="还没有检测到 Provider" />
             )}
@@ -76,11 +135,7 @@ export function DashboardPage() {
                 {
                   title: "状态",
                   dataIndex: "status",
-                  render: (value: string) => (
-                    <Tag color={statusColor(value)}>
-                      {statusLabel(value)}
-                    </Tag>
-                  ),
+                  render: (value: string) => <StatusBadge status={value} />,
                 },
                 {
                   title: "更新时间",

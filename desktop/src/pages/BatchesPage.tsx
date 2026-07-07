@@ -1,31 +1,14 @@
-import { Alert, Button, Form, InputNumber, Modal, Select, Space, Spin, Table, Tag, Typography, Upload, message } from "antd";
+import { Alert, Button, Form, InputNumber, Modal, Select, Space, Spin, Table, Typography, Upload, message } from "antd";
 import type { UploadProps } from "antd";
 import { Download, UploadCloud } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
 import { SectionCard } from "../components/SectionCard";
+import { StatusBadge } from "../components/StatusBadge";
+import { TableActionMenu } from "../components/TableActionMenu";
 import { usePolling } from "../hooks/usePolling";
 import type { BatchSummary, ProfileRecord, ProviderGroupRecord, WorkflowRecord } from "../types";
-import { statusColor, statusLabel } from "../utils/status";
-
-function safeFileName(value: string) {
-  return value
-    .trim()
-    .replace(/[\\/:*?"<>|]/g, "-")
-    .replace(/\s+/g, "_")
-    .slice(0, 80) || "profile_input_template";
-}
-
-function downloadBlob(fileName: string, blob: Blob) {
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = fileName;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
-}
+import { downloadBlob, safeFileName } from "../utils/files";
 
 function profileGroupId(profile: ProfileRecord) {
   const raw = profile.group_summary?.id;
@@ -229,7 +212,7 @@ export function BatchesPage() {
     }
     try {
       const blob = await api.downloadWorkflowInputTemplate(selectedWorkflowId);
-      downloadBlob(`${safeFileName(selectedWorkflow.name)}_流程参数模板.xlsx`, blob);
+      downloadBlob(`${safeFileName(selectedWorkflow.name, "profile_input_template")}_流程参数模板.xlsx`, blob);
       message.success("模板已导出");
     } catch (cause) {
       message.error(cause instanceof Error ? cause.message : "导出模板失败");
@@ -390,32 +373,34 @@ export function BatchesPage() {
             {
               title: "状态",
               dataIndex: "status",
-              render: (value: string) => <Tag color={statusColor(value)}>{statusLabel(value)}</Tag>,
+              render: (value: string) => <StatusBadge status={value} />,
             },
             {
               title: "动作",
               render: (_, item: BatchSummary) => {
                 if (["ready", "running", "paused"].includes(item.status)) {
                   return (
-                    <Button
-                      size="small"
-                      danger
+                    <TableActionMenu
                       loading={batchActionLoadingId === item.id}
-                      onClick={() => handleCancelBatch(item)}
-                    >
-                      取消
-                    </Button>
+                      primary={{
+                        key: "cancel",
+                        label: "取消",
+                        danger: true,
+                        onClick: () => handleCancelBatch(item),
+                      }}
+                    />
                   );
                 }
                 if (item.status === "failed") {
                   return (
-                    <Button
-                      size="small"
+                    <TableActionMenu
                       loading={batchActionLoadingId === item.id}
-                      onClick={() => void handleRetryBatch(item)}
-                    >
-                      重试
-                    </Button>
+                      primary={{
+                        key: "retry",
+                        label: "重试",
+                        onClick: () => void handleRetryBatch(item),
+                      }}
+                    />
                   );
                 }
                 return null;

@@ -530,12 +530,13 @@ export function WorkflowStepComposer({
                 >
                   {({ getFieldValue }) =>
                     getFieldValue("clickTargetMode") === "random_many" ? (
-                      <Form.Item
-                        name="randomClickCount"
-                        label="随机点击次数"
-                        rules={[{ required: true, message: "请输入随机点击次数" }]}
-                      >
-                        <InputNumber min={1} max={100} style={{ width: "100%" }} />
+	                      <Form.Item
+	                        name="randomClickCount"
+	                        label="随机点击次数"
+	                        extra="安全上限为 5 次；如果命中过多元素，运行时会停止并提示缩小定位范围。"
+	                        rules={[{ required: true, message: "请输入随机点击次数" }]}
+	                      >
+                        <InputNumber min={1} max={5} style={{ width: "100%" }} />
                       </Form.Item>
                     ) : (
                       <Alert

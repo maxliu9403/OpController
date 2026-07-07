@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 type PollingOptions = {
   intervalMs?: number;
@@ -37,7 +37,7 @@ function normalizeOptions(intervalOrOptions: number | PollingOptions): Required<
 }
 
 export function usePolling<T>(factory: () => Promise<T>, intervalOrOptions: number | PollingOptions = 8000) {
-  const options = useMemo(() => normalizeOptions(intervalOrOptions), [intervalOrOptions]);
+  const options = normalizeOptions(intervalOrOptions);
   const cachedData = options.cacheKey ? (pollingCache.get(options.cacheKey) as T | undefined) : undefined;
   const [data, setData] = useState<T | null>(cachedData ?? null);
   const [loading, setLoading] = useState(options.enabled && cachedData === undefined);
@@ -46,6 +46,7 @@ export function usePolling<T>(factory: () => Promise<T>, intervalOrOptions: numb
   useEffect(() => {
     let mounted = true;
     let timer: number | undefined;
+    let failureCount = 0;
     const cached = options.cacheKey ? (pollingCache.get(options.cacheKey) as T | undefined) : undefined;
 
     if (!options.enabled) {
@@ -62,6 +63,22 @@ export function usePolling<T>(factory: () => Promise<T>, intervalOrOptions: numb
       setLoading(true);
     }
 
+    const nextDelay = () => {
+      if (document.visibilityState === "hidden") {
+        return Math.max(options.intervalMs * 3, 30000);
+      }
+      if (failureCount > 0) {
+        return Math.min(options.intervalMs * 2 ** Math.min(failureCount, 4), 60000);
+      }
+      return options.intervalMs;
+    };
+
+    const scheduleNext = () => {
+      if (mounted) {
+        timer = window.setTimeout(() => void load(), nextDelay());
+      }
+    };
+
     const load = async () => {
       try {
         const result = await factory();
@@ -71,24 +88,35 @@ export function usePolling<T>(factory: () => Promise<T>, intervalOrOptions: numb
           }
           setData(result);
           setError(null);
+          failureCount = 0;
         }
       } catch (cause) {
         if (mounted) {
           setError(cause instanceof Error ? cause.message : "Unknown error");
+          failureCount += 1;
         }
       } finally {
         if (mounted) {
           setLoading(false);
         }
       }
-      if (mounted) {
-        timer = window.setTimeout(() => void load(), options.intervalMs);
+      scheduleNext();
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible" && mounted) {
+        if (timer !== undefined) {
+          window.clearTimeout(timer);
+        }
+        void load();
       }
     };
 
+    document.addEventListener("visibilitychange", handleVisibilityChange);
     void load();
     return () => {
       mounted = false;
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
       if (timer !== undefined) {
         window.clearTimeout(timer);
       }

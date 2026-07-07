@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import logging
 
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -20,6 +21,9 @@ from app.services.schedule_service import ScheduleService
 from app.services.seed_service import SeedService
 from app.services.system_service import SystemService
 from app.services.workflow_service import WorkflowService
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -67,7 +71,7 @@ class RuntimeContext:
         return cls(
             registry=registry,
             monitor=monitor,
-            system_service=SystemService(registry=registry),
+            system_service=SystemService(registry=registry, provider_service=provider_service),
             provider_service=provider_service,
             workflow_service=workflow_service,
             locator_service=LocatorService(),
@@ -76,3 +80,15 @@ class RuntimeContext:
             schedule_service=schedule_service,
             seed_service=SeedService(workflow_service=workflow_service, repo_root=repo_root),
         )
+
+    async def aclose(self) -> None:
+        if not self.registry:
+            return
+        for provider in self.registry.list():
+            try:
+                await provider.aclose()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "failed to close provider resources",
+                    extra={"provider_type": provider.provider_type, "error": str(exc)},
+                )

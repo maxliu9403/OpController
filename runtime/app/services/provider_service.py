@@ -3,10 +3,13 @@ from __future__ import annotations
 import asyncio
 from collections import Counter
 from datetime import datetime
+import logging
+import time
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.models import ProfileRecord, ProviderScopeRecord
 from app.providers.base import BrowserProvider
 from app.providers.config_store import ProviderConfigStore
@@ -25,15 +28,20 @@ from app.schemas.provider import (
 )
 
 
+logger = logging.getLogger(__name__)
+
+
 class ProviderService:
     MASKED_SECRET = "********"
 
     def __init__(self, registry: ProviderRegistry, config_store: ProviderConfigStore | None = None) -> None:
         self.registry = registry
         self.config_store = config_store
+        self._health_cache: dict[str, tuple[float, ProviderHealth]] = {}
+        self._health_tasks: dict[str, asyncio.Task[ProviderHealth]] = {}
 
     async def list_providers(self) -> list[ProviderInfo]:
-        return [await provider.describe() for provider in self.registry.list()]
+        return [self._describe_with_cached_health(provider) for provider in self.registry.list()]
 
     async def get_config(self, provider_type: str) -> ProviderConfig:
         provider = self.registry.get(provider_type)
@@ -55,6 +63,7 @@ class ProviderService:
         if self.config_store:
             await self.config_store.save_values(provider_type, values)
             values = await self.config_store.get_values(provider_type)
+        self.invalidate_health(provider_type)
         return self._to_provider_config(provider, values)
 
     async def reveal_config_secret(self, provider_type: str, key: str) -> ProviderConfigSecret:
@@ -73,7 +82,102 @@ class ProviderService:
 
     async def health_check(self, provider_type: str) -> ProviderHealth:
         provider = self.registry.get(provider_type)
-        return await provider.health_check()
+        return await self._refresh_health(provider, force=True)
+
+    def invalidate_health(self, provider_type: str) -> None:
+        self._health_cache.pop(provider_type, None)
+        task = self._health_tasks.pop(provider_type, None)
+        if task and not task.done():
+            task.cancel()
+
+    def _describe_with_cached_health(self, provider: BrowserProvider) -> ProviderInfo:
+        return ProviderInfo(
+            provider_type=provider.provider_type,
+            display_name=provider.display_name,
+            default_port=provider.default_port,
+            capabilities=provider.capabilities,
+            health=self._health_snapshot(provider),
+        )
+
+    def _health_snapshot(self, provider: BrowserProvider) -> ProviderHealth:
+        now = time.monotonic()
+        cached = self._health_cache.get(provider.provider_type)
+        if cached:
+            cached_at, health = cached
+            age_sec = max(0.0, now - cached_at)
+            if age_sec < settings.provider_health_cache_ttl_sec:
+                return health.model_copy(update={"details": {**health.details, "cached": True, "age_sec": round(age_sec, 1)}})
+
+        self._schedule_health_refresh(provider)
+        if cached:
+            cached_at, health = cached
+            age_sec = max(0.0, now - cached_at)
+            return health.model_copy(
+                update={
+                    "details": {
+                        **health.details,
+                        "cached": True,
+                        "stale": True,
+                        "age_sec": round(age_sec, 1),
+                    }
+                }
+            )
+        return ProviderHealth(
+            installed=False,
+            healthy=False,
+            message="Provider 体检正在后台刷新，请稍后查看或点击测试联通性",
+            details={"status": "pending", "cached": False},
+        )
+
+    def _schedule_health_refresh(self, provider: BrowserProvider) -> None:
+        existing = self._health_tasks.get(provider.provider_type)
+        if existing and not existing.done():
+            return
+        try:
+            task = asyncio.create_task(self._refresh_health(provider, force=False))
+        except RuntimeError:
+            return
+        self._health_tasks[provider.provider_type] = task
+
+        def cleanup(done_task: asyncio.Task[ProviderHealth]) -> None:
+            self._health_tasks.pop(provider.provider_type, None)
+            try:
+                done_task.result()
+            except asyncio.CancelledError:
+                return
+            except Exception:  # noqa: BLE001
+                logger.exception("provider health background refresh failed", extra={"provider_type": provider.provider_type})
+
+        task.add_done_callback(cleanup)
+
+    async def _refresh_health(self, provider: BrowserProvider, *, force: bool) -> ProviderHealth:
+        cached = self._health_cache.get(provider.provider_type)
+        if not force and cached:
+            cached_at, health = cached
+            if time.monotonic() - cached_at < settings.provider_health_cache_ttl_sec:
+                return health
+        try:
+            health = await asyncio.wait_for(provider.health_check(), timeout=settings.provider_health_timeout_sec)
+        except asyncio.TimeoutError:
+            health = ProviderHealth(
+                installed=False,
+                healthy=False,
+                message=f"{provider.display_name} 体检超时，请确认客户端已启动且 Local API 可访问",
+                details={"timeout": True},
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "provider health check failed",
+                extra={"provider_type": provider.provider_type, "error": str(exc)},
+            )
+            health = ProviderHealth(
+                installed=False,
+                healthy=False,
+                message=f"{provider.display_name} 体检失败：{exc}",
+                details={"error": str(exc)},
+            )
+        self._health_cache[provider.provider_type] = (time.monotonic(), health)
+        return health
 
     async def sync_profiles(
         self,
@@ -278,7 +382,11 @@ class ProviderService:
         try:
             provider = self.registry.get(provider_type)
             provider_groups = await provider.list_groups()
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "provider group list failed; falling back to cached groups",
+                extra={"provider_type": provider_type, "error": str(exc)},
+            )
             return cached_groups
 
         cached_by_id = {item.external_group_id: item for item in cached_groups}

@@ -29,6 +29,9 @@ class NstBrowserProvider(BrowserProvider):
         self._config_store = config_store
         self._api_gate = asyncio.Semaphore(3)
         self._lifecycle_gate = asyncio.Semaphore(2)
+        self._client: httpx.AsyncClient | None = None
+        self._client_base_url: str | None = None
+        self._client_lock = asyncio.Lock()
 
     @property
     def capabilities(self) -> ProviderCapability:
@@ -72,6 +75,13 @@ class NstBrowserProvider(BrowserProvider):
             "api_key": settings.nstbrowser_api_key,
         }
 
+    async def aclose(self) -> None:
+        async with self._client_lock:
+            if self._client and not self._client.is_closed:
+                await self._client.aclose()
+            self._client = None
+            self._client_base_url = None
+
     async def _runtime_config(self) -> dict[str, Any]:
         values = self.default_config_values()
         stored = await self._config_store.get_values(self.provider_type)
@@ -95,34 +105,29 @@ class NstBrowserProvider(BrowserProvider):
         if not api_key:
             raise RuntimeError("请先配置 NSTBrowser API Key")
         async with self._api_gate:
-            async with httpx.AsyncClient(
-                base_url=config["api_base"],
-                timeout=settings.nstbrowser_api_timeout_sec,
-                trust_env=False,
-                follow_redirects=True,
-            ) as client:
-                try:
-                    response = await client.request(
-                        method,
-                        path,
-                        params=params,
-                        json=json_payload,
-                        headers={"x-api-key": api_key},
-                    )
-                    response.raise_for_status()
-                except httpx.ConnectError as exc:
-                    raise RuntimeError(
-                        "NSTBrowser 本地 API 无法连接，请确认 NSTBrowser 客户端已启动，且本地 API 地址配置正确"
-                    ) from exc
-                except httpx.TimeoutException as exc:
-                    raise RuntimeError(
-                        f"NSTBrowser 本地 API 请求超时，请确认客户端可用或适当调大超时时间"
-                    ) from exc
-                except httpx.HTTPStatusError as exc:
-                    status_code = exc.response.status_code
-                    if status_code in {401, 403}:
-                        raise RuntimeError("NSTBrowser API Key 无效或没有权限，请检查 Provider 配置") from exc
-                    raise RuntimeError(f"NSTBrowser API 请求失败：HTTP {status_code}") from exc
+            client = await self._client_for_config(config["api_base"])
+            try:
+                response = await client.request(
+                    method,
+                    path,
+                    params=params,
+                    json=json_payload,
+                    headers={"x-api-key": api_key},
+                )
+                response.raise_for_status()
+            except httpx.ConnectError as exc:
+                raise RuntimeError(
+                    "NSTBrowser 本地 API 无法连接，请确认 NSTBrowser 客户端已启动，且本地 API 地址配置正确"
+                ) from exc
+            except httpx.TimeoutException as exc:
+                raise RuntimeError(
+                    "NSTBrowser 本地 API 请求超时，请确认客户端可用或适当调大超时时间"
+                ) from exc
+            except httpx.HTTPStatusError as exc:
+                status_code = exc.response.status_code
+                if status_code in {401, 403}:
+                    raise RuntimeError("NSTBrowser API Key 无效或没有权限，请检查 Provider 配置") from exc
+                raise RuntimeError(f"NSTBrowser API 请求失败：HTTP {status_code}") from exc
         data = response.json()
         if not isinstance(data, dict):
             raise RuntimeError("NSTBrowser API 返回格式异常")
@@ -133,6 +138,21 @@ class NstBrowserProvider(BrowserProvider):
         if code_failed or error_flag_failed:
             raise RuntimeError(str(data.get("msg") or "NSTBrowser API error"))
         return data
+
+    async def _client_for_config(self, api_base: str) -> httpx.AsyncClient:
+        async with self._client_lock:
+            if self._client and self._client_base_url == api_base and not self._client.is_closed:
+                return self._client
+            if self._client and not self._client.is_closed:
+                await self._client.aclose()
+            self._client = httpx.AsyncClient(
+                base_url=api_base,
+                timeout=settings.nstbrowser_api_timeout_sec,
+                trust_env=False,
+                follow_redirects=True,
+            )
+            self._client_base_url = api_base
+            return self._client
 
     async def _get_all_profiles(self) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
