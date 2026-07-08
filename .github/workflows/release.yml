@@ -144,29 +144,12 @@ jobs:
           fi
           asset_name="$(basename "$nsis")"
           signature="$(tr -d '\r\n' < "$sig")"
-          python - <<PY
-import json
-from datetime import datetime, timezone
-
-tag = ${tag@Q}
-version = ${version@Q}
-asset_name = ${asset_name@Q}
-signature = ${signature@Q}
-payload = {
-    "version": version,
-    "notes": f"OpController {tag}",
-    "pub_date": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
-    "platforms": {
-        "windows-x86_64-nsis": {
-            "signature": signature,
-            "url": f"https://github.com/${{ github.repository }}/releases/download/{tag}/{asset_name}",
-        }
-    },
-}
-with open("release-assets/latest.json", "w", encoding="utf-8") as f:
-    json.dump(payload, f, indent=2, ensure_ascii=False)
-    f.write("\\n")
-PY
+          RELEASE_TAG="$tag" \
+          RELEASE_VERSION="$version" \
+          RELEASE_ASSET_NAME="$asset_name" \
+          RELEASE_SIGNATURE="$signature" \
+          RELEASE_REPOSITORY="${{ github.repository }}" \
+          python -c 'import json, os; from datetime import datetime, timezone; tag=os.environ["RELEASE_TAG"]; version=os.environ["RELEASE_VERSION"]; asset_name=os.environ["RELEASE_ASSET_NAME"]; signature=os.environ["RELEASE_SIGNATURE"]; repository=os.environ["RELEASE_REPOSITORY"]; payload={"version": version, "notes": f"OpController {tag}", "pub_date": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"), "platforms": {"windows-x86_64-nsis": {"signature": signature, "url": f"https://github.com/{repository}/releases/download/{tag}/{asset_name}"}}}; open("release-assets/latest.json", "w", encoding="utf-8").write(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")'
           cat release-assets/latest.json
 
       - name: Create or update release
