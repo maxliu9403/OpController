@@ -125,5 +125,5 @@ async def test_build_input_template_contains_all_workflow_profiles() -> None:
         assert "使用说明" in workbook.sheetnames
         rows = list(workbook.active.iter_rows(values_only=True))
 
-        assert rows[0][:5] == ("profile_id", "profile_name", "group_name", "keyword", "note")
+        assert rows[0][:6] == ("profile_id", "profile_name", "group_name", "profile_remark", "keyword", "note")
         assert [row[0] for row in rows[1:]] == ["101", "102"]

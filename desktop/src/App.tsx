@@ -1,7 +1,7 @@
 import { ConfigProvider, theme } from "antd";
 import zhCN from "antd/locale/zh_CN";
 import { lazy, Suspense, useEffect, useMemo, useState, type ReactNode } from "react";
-import { createBrowserRouter, RouterProvider } from "react-router-dom";
+import { createBrowserRouter, Navigate, RouterProvider } from "react-router-dom";
 import { AppShell } from "./components/AppShell";
 import { RuntimeBootstrap } from "./components/RuntimeBootstrap";
 import { ThemeModeContext, type ThemeMode } from "./themeMode";
@@ -9,9 +9,8 @@ import { ThemeModeContext, type ThemeMode } from "./themeMode";
 const DashboardPage = lazy(() => import("./pages/DashboardPage").then((module) => ({ default: module.DashboardPage })));
 const ProvidersPage = lazy(() => import("./pages/ProvidersPage").then((module) => ({ default: module.ProvidersPage })));
 const WorkflowsPage = lazy(() => import("./pages/WorkflowsPage").then((module) => ({ default: module.WorkflowsPage })));
-const BatchesPage = lazy(() => import("./pages/BatchesPage").then((module) => ({ default: module.BatchesPage })));
+const TaskManagementPage = lazy(() => import("./pages/TaskManagementPage").then((module) => ({ default: module.TaskManagementPage })));
 const MonitorPage = lazy(() => import("./pages/MonitorPage").then((module) => ({ default: module.MonitorPage })));
-const SchedulesPage = lazy(() => import("./pages/SchedulesPage").then((module) => ({ default: module.SchedulesPage })));
 const ResultsPage = lazy(() => import("./pages/ResultsPage").then((module) => ({ default: module.ResultsPage })));
 
 function LazyPage({ children }: { children: ReactNode }) {
@@ -26,9 +25,10 @@ const router = createBrowserRouter([
       { index: true, element: <LazyPage><DashboardPage /></LazyPage> },
       { path: "providers", element: <LazyPage><ProvidersPage /></LazyPage> },
       { path: "workflows", element: <LazyPage><WorkflowsPage /></LazyPage> },
-      { path: "batches", element: <LazyPage><BatchesPage /></LazyPage> },
+      { path: "tasks", element: <LazyPage><TaskManagementPage /></LazyPage> },
+      { path: "batches", element: <Navigate to="/tasks?tab=instant" replace /> },
       { path: "monitor", element: <LazyPage><MonitorPage /></LazyPage> },
-      { path: "schedules", element: <LazyPage><SchedulesPage /></LazyPage> },
+      { path: "schedules", element: <Navigate to="/tasks?tab=scheduled" replace /> },
       { path: "results", element: <LazyPage><ResultsPage /></LazyPage> },
     ],
   },

@@ -16,6 +16,13 @@ from app.schemas.provider import (
 )
 from app.services.batch_service import BatchService
 from app.services.execution_service import ExecutionError, ExecutionService
+from app.services.window_layout import (
+    MacOsWindowLayoutDriver,
+    ScreenBounds,
+    SlotLayoutCalculator,
+    SlotWindow,
+    WindowsWindowLayoutDriver,
+)
 
 
 def test_build_provider_tile_layout_uses_ixbrowser_adaptive_payload() -> None:
@@ -23,26 +30,62 @@ def test_build_provider_tile_layout_uses_ixbrowser_adaptive_payload() -> None:
         active_count=6,
         slot_limit=6,
         runtime_policy={"min_window_width": 420, "min_window_height": 720},
+        screen_bounds=(0, 0, 1440, 900),
     )
 
     assert layout["layout"] == 1
     assert layout["adaptive"] == 1
     assert layout["profile_size_width"] == 420
-    assert layout["profile_size_hight"] == 720
+    assert layout["profile_size_hight"] == 400
     assert layout["per_line_number_of_profiles"] == 3
 
 
-def test_build_macos_layout_script_targets_only_session_pids() -> None:
-    script = BatchService._build_macos_layout_script(
-        pids=[123, 456],
+def test_slot_layout_uses_stable_slot_positions() -> None:
+    plan = SlotLayoutCalculator.build_plan(
         slot_limit=6,
-        min_width=420,
-        min_height=720,
+        runtime_policy={"min_window_width": 420, "min_window_height": 720},
+        screen_bounds=ScreenBounds(0, 0, 1440, 900),
+    )
+
+    assert (plan.columns, plan.rows) == (3, 2)
+    assert plan.rects[0].x == 10
+    assert plan.rects[0].y == 40
+    assert plan.rects[5].x > plan.rects[3].x
+    assert plan.rects[5].y > plan.rects[2].y
+
+
+def test_build_macos_layout_script_targets_slot_pids() -> None:
+    plan = SlotLayoutCalculator.build_plan(
+        slot_limit=6,
+        runtime_policy={"min_window_width": 420, "min_window_height": 720},
+        screen_bounds=ScreenBounds(0, 0, 1440, 900),
+    )
+    script = MacOsWindowLayoutDriver.build_script(
+        windows=[SlotWindow(slot_index=0, pid=123), SlotWindow(slot_index=5, pid=456)],
+        plan=plan,
     )
 
     assert "set targetPids to {123, 456}" in script
+    assert "set targetPositions" in script
     assert "unix id of p" in script
-    assert "set position of item windowIndex of targetWindows" in script
+    assert "set position of targetWindow" in script
+
+
+def test_build_windows_layout_script_uses_win32_and_slot_rects() -> None:
+    plan = SlotLayoutCalculator.build_plan(
+        slot_limit=6,
+        runtime_policy={"min_window_width": 420, "min_window_height": 720},
+        screen_bounds=ScreenBounds(0, 0, 1440, 900),
+    )
+    script = WindowsWindowLayoutDriver.build_script(
+        windows=[SlotWindow(slot_index=0, pid=123), SlotWindow(slot_index=5, pid=456)],
+        plan=plan,
+    )
+
+    assert "SetWindowPos" in script
+    assert "Pid = 123" in script
+    assert "Pid = 456" in script
+    assert "W = 420" in script
 
 
 @pytest.mark.asyncio

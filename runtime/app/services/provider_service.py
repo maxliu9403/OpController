@@ -38,7 +38,6 @@ class ProviderService:
         self.registry = registry
         self.config_store = config_store
         self._health_cache: dict[str, tuple[float, ProviderHealth]] = {}
-        self._health_tasks: dict[str, asyncio.Task[ProviderHealth]] = {}
 
     async def list_providers(self) -> list[ProviderInfo]:
         return [self._describe_with_cached_health(provider) for provider in self.registry.list()]
@@ -86,9 +85,6 @@ class ProviderService:
 
     def invalidate_health(self, provider_type: str) -> None:
         self._health_cache.pop(provider_type, None)
-        task = self._health_tasks.pop(provider_type, None)
-        if task and not task.done():
-            task.cancel()
 
     def _describe_with_cached_health(self, provider: BrowserProvider) -> ProviderInfo:
         return ProviderInfo(
@@ -108,7 +104,6 @@ class ProviderService:
             if age_sec < settings.provider_health_cache_ttl_sec:
                 return health.model_copy(update={"details": {**health.details, "cached": True, "age_sec": round(age_sec, 1)}})
 
-        self._schedule_health_refresh(provider)
         if cached:
             cached_at, health = cached
             age_sec = max(0.0, now - cached_at)
@@ -122,33 +117,16 @@ class ProviderService:
                     }
                 }
             )
+        return self._idle_health(provider)
+
+    @staticmethod
+    def _idle_health(provider: BrowserProvider) -> ProviderHealth:
         return ProviderHealth(
             installed=False,
             healthy=False,
-            message="Provider 体检正在后台刷新，请稍后查看或点击测试联通性",
-            details={"status": "pending", "cached": False},
+            message=f"{provider.display_name} 尚未启动检查。点击“启动”后再检测本地指纹浏览器接入状态。",
+            details={"status": "idle", "cached": False, "manual_start_required": True},
         )
-
-    def _schedule_health_refresh(self, provider: BrowserProvider) -> None:
-        existing = self._health_tasks.get(provider.provider_type)
-        if existing and not existing.done():
-            return
-        try:
-            task = asyncio.create_task(self._refresh_health(provider, force=False))
-        except RuntimeError:
-            return
-        self._health_tasks[provider.provider_type] = task
-
-        def cleanup(done_task: asyncio.Task[ProviderHealth]) -> None:
-            self._health_tasks.pop(provider.provider_type, None)
-            try:
-                done_task.result()
-            except asyncio.CancelledError:
-                return
-            except Exception:  # noqa: BLE001
-                logger.exception("provider health background refresh failed", extra={"provider_type": provider.provider_type})
-
-        task.add_done_callback(cleanup)
 
     async def _refresh_health(self, provider: BrowserProvider, *, force: bool) -> ProviderHealth:
         cached = self._health_cache.get(provider.provider_type)
@@ -195,6 +173,7 @@ class ProviderService:
                     provider_type=profile.provider_type,
                     external_profile_id=profile.external_profile_id,
                     display_name=profile.display_name,
+                    remark=profile.remark,
                     group_summary=profile.group_summary,
                     tag_summary=profile.tag_summary,
                     proxy_summary=profile.proxy_summary,
@@ -294,6 +273,7 @@ class ProviderService:
                     "provider_type": profile.provider_type,
                     "external_profile_id": profile.external_profile_id,
                     "display_name": profile.display_name,
+                    "remark": profile.remark,
                     "group_summary": profile.group_summary or {},
                     "tag_summary": profile.tag_summary or [],
                     "proxy_summary": profile.proxy_summary or {},
@@ -619,6 +599,7 @@ class ProviderService:
         return " ".join(
             [
                 profile.display_name,
+                profile.remark or "",
                 profile.external_profile_id,
                 str(group.get("name") or ""),
                 str(group.get("id") or ""),

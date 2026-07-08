@@ -431,7 +431,7 @@ Runtime 配置统一使用 `OPCTRL_` 前缀。
 | `OPCTRL_BROWSER_ATTACH_TIMEOUT_SEC` | `25` | CDP 附着超时。 |
 | `OPCTRL_WINDOW_LAYOUT_TIMEOUT_SEC` | `6` | 窗口布局超时。 |
 | `OPCTRL_WINDOW_LAYOUT_MIN_WIDTH` | `320` | 可视化平铺时单个窗口允许缩放到的最小宽度。 |
-| `OPCTRL_WINDOW_LAYOUT_MIN_HEIGHT` | `360` | 可视化平铺时单个窗口允许缩放到的最小高度。 |
+| `OPCTRL_WINDOW_LAYOUT_MIN_HEIGHT` | `280` | 可视化平铺时单个窗口允许缩放到的最小高度。 |
 | `OPCTRL_WINDOW_LAYOUT_MARGIN_PX` | `10` | 平铺窗口之间和屏幕边缘的间距。 |
 
 示例：
@@ -474,7 +474,7 @@ cache/            runtime 缓存
 3. 确认 Local API 运行在配置端口，默认 `53200`。
 4. 在 Provider 页面同步 Profile。
 5. 如果只希望管理部分分组或窗口，在 Provider 页面配置管理范围。
-6. 使用页面元素拾取和流程试运行前，需要先打开一个测试 Profile。
+6. 使用页面元素拾取和流程试运行前，需要先打开一个测试指纹窗口。
 
 如果 Profile 已经在 ixBrowser 中打开，但 ixBrowser 没有返回可附着的调试端点，先在 ixBrowser 中关闭该 Profile，再通过 OpController 重新打开。
 

@@ -4,10 +4,6 @@ import asyncio
 import csv
 import io
 import logging
-import math
-import platform
-import re
-import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -47,6 +43,13 @@ from app.services.execution_service import ExecutionService
 from app.services.monitor_service import MonitorService
 from app.services.provider_service import ProviderService
 from app.services.resilience import DynamicSlotController
+from app.services.window_layout import (
+    MacOsWindowLayoutDriver,
+    ScreenBounds,
+    SlotLayoutCalculator,
+    SlotWindow,
+    get_window_layout_driver,
+)
 from app.services.workflow_service import WorkflowService
 
 
@@ -220,7 +223,7 @@ class BatchService:
             warnings.append(
                 "Provider 管理范围未命中任何 Profile"
                 if empty_reason == "provider_scope_empty"
-                else "流程没有命中可运行 Profile，请先绑定运行 Profile 组"
+                else "流程没有命中可运行指纹窗口，请先绑定运行指纹窗口组"
             )
 
         for index, row in enumerate(rows, start=2):
@@ -273,7 +276,7 @@ class BatchService:
         workbook = Workbook()
         sheet = workbook.active
         sheet.title = "Profile参数"
-        headers = ["profile_id", "profile_name", "group_name", "keyword", "note"]
+        headers = ["profile_id", "profile_name", "group_name", "profile_remark", "keyword", "note"]
         sheet.append(headers)
         header_fill = PatternFill("solid", fgColor="1F6F78")
         header_font = Font(color="FFFFFF", bold=True)
@@ -287,6 +290,7 @@ class BatchService:
                     profile.external_profile_id,
                     profile.display_name,
                     str(profile.group_summary.get("name") or ""),
+                    profile.remark or "",
                     "",
                     "",
                 ]
@@ -300,13 +304,13 @@ class BatchService:
         guide = workbook.create_sheet("使用说明")
         guide_rows = [
             ["主题", "说明"],
-            ["一行一个 Profile", "每一行代表一个指纹浏览器窗口的执行参数，系统会按 profile_id 精确绑定窗口。"],
-            ["必填列 profile_id", "不要删除 profile_id 列；它必须等于指纹浏览器中的 Profile ID。"],
-            ["可编辑列", "profile_name 和 group_name 用于识别窗口，通常不参与流程变量，可保留不改。"],
+            ["一行一个指纹窗口", "每一行代表一个指纹浏览器窗口的执行参数，系统会按 profile_id 精确绑定窗口。"],
+            ["必填列 profile_id", "不要删除 profile_id 列；它必须等于指纹浏览器中的指纹窗口 ID。"],
+            ["可编辑列", "profile_name、group_name 和 profile_remark 用于识别窗口，通常不参与流程变量，可保留不改。"],
             ["业务字段", "可以新增任意业务列，例如 keyword、price、shop_id、note。"],
             ["流程变量", "流程节点中使用 ${row.keyword}、${row.price}、${row.shop_id} 读取同一行的字段值。"],
-            ["槽位说明", "槽位只控制同时打开的窗口数量；表格有多少个合法 profile_id，最终就会执行多少个 Profile。"],
-            ["校验规则", "导入时会检查 profile_id 是否为空、重复、或不在当前流程绑定的 Profile 组内。"],
+            ["槽位说明", "槽位只控制同时打开的窗口数量；表格有多少个合法 profile_id，最终就会执行多少个指纹窗口。"],
+            ["校验规则", "导入时会检查 profile_id 是否为空、重复、或不在当前流程绑定的指纹窗口组内。"],
         ]
         for row in guide_rows:
             guide.append(row)
@@ -621,8 +625,9 @@ class BatchService:
                 }
                 await session.commit()
                 return
-            screen_bounds = await self._read_screen_bounds()
-            screen_capacity = self._estimate_visual_slot_capacity(screen_bounds)
+            layout_driver = get_window_layout_driver()
+            screen_bounds = await layout_driver.read_screen_bounds()
+            screen_capacity = SlotLayoutCalculator.estimate_capacity(screen_bounds)
             slot_limit = max(1, min(requested_slots, settings.max_slot_limit, screen_capacity, len(executable_rows)))
             slot_controller = self._build_slot_controller(slot_limit)
             if control.cancelled:
@@ -646,6 +651,7 @@ class BatchService:
             await session.commit()
 
         provider = self.registry.get(batch.provider_type)
+        layout_driver = get_window_layout_driver()
         await self.monitor.publish(
             "batch.slot_policy",
             {
@@ -662,17 +668,24 @@ class BatchService:
 
         async def arrange_active_windows() -> None:
             async with layout_lock:
-                sessions = [active_sessions[index] for index in sorted(active_sessions)]
-                if not sessions:
+                slot_windows = [
+                    SlotWindow(slot_index=index, pid=session.browser_pid)
+                    for index, session in sorted(active_sessions.items())
+                    if session.browser_pid
+                ]
+                if not active_sessions:
                     return
                 layout = self._build_provider_tile_layout(
-                    active_count=len(sessions),
+                    active_count=len(active_sessions),
                     slot_limit=slot_limit,
                     runtime_policy=workflow.runtime_policy.model_dump(),
                     screen_bounds=screen_bounds,
                 )
+                layout["ids"] = [session.provider_profile_id for _, session in sorted(active_sessions.items())]
                 native_ok = True
                 native_error = None
+                os_layout_ok = True
+                os_layout_error = None
                 try:
                     await provider.arrange_windows(layout)
                 except Exception as exc:  # noqa: BLE001
@@ -682,20 +695,34 @@ class BatchService:
                         "provider native window layout failed; falling back to os layout",
                         extra={"batch_id": batch_id, "provider_type": batch.provider_type, "error": native_error},
                     )
-                    await self._arrange_windows_macos(
-                        sessions=sessions,
+                try:
+                    await layout_driver.arrange(
+                        windows=slot_windows,
                         slot_limit=slot_limit,
                         runtime_policy=workflow.runtime_policy.model_dump(),
                         screen_bounds=screen_bounds,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    os_layout_ok = False
+                    os_layout_error = str(exc)
+                    logger.warning(
+                        "os window layout failed",
+                        extra={"batch_id": batch_id, "provider_type": batch.provider_type, "error": os_layout_error},
                     )
                 await self.monitor.publish(
                     "batch.layout",
                     {
                         "batch_id": batch_id,
-                        "active_count": len(sessions),
+                        "active_count": len(active_sessions),
                         "slot_limit": slot_limit,
                         "native_provider_layout": native_ok,
                         "native_error": native_error,
+                        "os_window_layout": os_layout_ok,
+                        "os_error": os_layout_error,
+                        "slot_windows": [
+                            {"slot_index": window.slot_index, "pid": window.pid}
+                            for window in slot_windows
+                        ],
                     },
                 )
 
@@ -882,84 +909,14 @@ class BatchService:
         active_count: int,
         slot_limit: int,
         runtime_policy: dict[str, Any],
-        screen_bounds: tuple[int, int, int, int] | None = None,
-    ) -> dict[str, int]:
-        per_line = max(1, math.ceil(math.sqrt(max(active_count, slot_limit))))
-        rows = max(1, math.ceil(max(active_count, slot_limit) / per_line))
-        preferred_width = max(
-            settings.window_layout_min_width,
-            int(runtime_policy.get("min_window_width") or settings.window_layout_default_width),
-        )
-        preferred_height = max(
-            settings.window_layout_min_height,
-            int(runtime_policy.get("min_window_height") or settings.window_layout_default_height),
-        )
-        width = preferred_width
-        height = preferred_height
-        if screen_bounds:
-            left, top, right, bottom = screen_bounds
-            usable_width = max(1, right - left - (settings.window_layout_margin_px * (per_line + 1)))
-            usable_height = max(
-                1,
-                bottom
-                - top
-                - settings.window_layout_bottom_reserved_px
-                - (settings.window_layout_margin_px * (rows + 1)),
-            )
-            width = max(settings.window_layout_min_width, min(preferred_width, int(usable_width / per_line)))
-            height = max(settings.window_layout_min_height, min(preferred_height, int(usable_height / rows)))
-        return {
-            "screen": settings.window_layout_screen_index,
-            "layout": 1,
-            "adaptive": 1,
-            "starting_position_x": settings.window_layout_margin_px,
-            "starting_position_y": settings.window_layout_margin_px,
-            "profile_size_width": width,
-            "profile_size_hight": height,
-            "profile_spacing_horizontal": settings.window_layout_margin_px,
-            "profile_spacing_vertical": settings.window_layout_margin_px,
-            "profile_deviaton_x": settings.window_layout_provider_deviation_px,
-            "profile_deviaton_y": settings.window_layout_provider_deviation_px,
-            "per_line_number_of_profiles": per_line,
-        }
-
-    async def _arrange_windows_macos(
-        self,
-        *,
-        sessions: list[ProviderSessionRef],
-        slot_limit: int,
-        runtime_policy: dict[str, Any],
-        screen_bounds: tuple[int, int, int, int] | None = None,
-    ) -> None:
-        if platform.system() != "Darwin":
-            return
-        pids = [session.browser_pid for session in sessions if session.browser_pid]
-        if not pids:
-            return
-        script = self._build_macos_layout_script(
-            pids=pids,
+        screen_bounds: ScreenBounds | tuple[int, int, int, int] | None = None,
+    ) -> dict[str, Any]:
+        return SlotLayoutCalculator.provider_tile_payload(
+            active_count=active_count,
             slot_limit=slot_limit,
-            min_width=settings.window_layout_min_width,
-            min_height=settings.window_layout_min_height,
-            screen_bounds=screen_bounds,
+            runtime_policy=runtime_policy,
+            screen_bounds=BatchService._normalize_screen_bounds(screen_bounds),
         )
-        try:
-            result = await asyncio.to_thread(
-                subprocess.run,
-                ["osascript", "-e", script],
-                capture_output=True,
-                text=True,
-                timeout=settings.window_layout_timeout_sec,
-                check=False,
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("macos window layout script failed", extra={"error": str(exc), "pids": pids})
-            return
-        if result.returncode != 0:
-            logger.warning(
-                "macos window layout script returned non-zero status",
-                extra={"returncode": result.returncode, "stderr": result.stderr.strip(), "pids": pids},
-            )
 
     @staticmethod
     def _build_macos_layout_script(
@@ -968,113 +925,36 @@ class BatchService:
         slot_limit: int,
         min_width: int,
         min_height: int,
-        screen_bounds: tuple[int, int, int, int] | None = None,
+        screen_bounds: ScreenBounds | tuple[int, int, int, int] | None = None,
     ) -> str:
-        pid_list = ", ".join(str(pid) for pid in pids)
-        columns = max(1, math.ceil(math.sqrt(max(len(pids), slot_limit))))
-        rows = max(1, math.ceil(max(len(pids), slot_limit) / columns))
-        screen_init = ""
-        if screen_bounds:
-            left, top, right, bottom = screen_bounds
-            screen_init = f"""
-set screenLeft to {left}
-set screenTop to {top}
-set screenRight to {right}
-set screenBottom to {bottom}
-"""
-        else:
-            screen_init = """
-tell application "Finder" to set screenBounds to bounds of window of desktop
-set screenLeft to item 1 of screenBounds
-set screenTop to item 2 of screenBounds
-set screenRight to item 3 of screenBounds
-set screenBottom to item 4 of screenBounds
-"""
-        return f"""
-set targetPids to {{{pid_list}}}
-set columnsCount to {columns}
-set rowsCount to {rows}
-set minWidth to {min_width}
-set minHeight to {min_height}
-set marginSize to {settings.window_layout_margin_px}
-{screen_init}
-set usableWidth to screenRight - screenLeft - (marginSize * (columnsCount + 1))
-set usableHeight to screenBottom - screenTop - {settings.window_layout_bottom_reserved_px} - (marginSize * (rowsCount + 1))
-set cellWidth to usableWidth / columnsCount
-set cellHeight to usableHeight / rowsCount
-if cellWidth < minWidth and ((minWidth * columnsCount) + (marginSize * (columnsCount + 1))) <= (screenRight - screenLeft) then set cellWidth to minWidth
-if cellHeight < minHeight and ((minHeight * rowsCount) + (marginSize * (rowsCount + 1)) + {settings.window_layout_bottom_reserved_px}) <= (screenBottom - screenTop) then set cellHeight to minHeight
-tell application "System Events"
-  set targetWindows to {{}}
-  repeat with p in processes
-    try
-      if targetPids contains (unix id of p) then
-        if (count of windows of p) > 0 then set end of targetWindows to item 1 of windows of p
-      end if
-    end try
-  end repeat
-  repeat with windowIndex from 1 to count of targetWindows
-    set zeroIndex to windowIndex - 1
-    set columnIndex to zeroIndex mod columnsCount
-    set rowIndex to zeroIndex div columnsCount
-    set xPosition to screenLeft + marginSize + (columnIndex * (cellWidth + marginSize))
-    set yPosition to screenTop + 30 + marginSize + (rowIndex * (cellHeight + marginSize))
-    try
-      set position of item windowIndex of targetWindows to {{xPosition, yPosition}}
-      set size of item windowIndex of targetWindows to {{cellWidth, cellHeight}}
-    end try
-  end repeat
-end tell
-"""
-
-    async def _read_screen_bounds(self) -> tuple[int, int, int, int] | None:
-        if platform.system() != "Darwin":
-            return None
-        try:
-            result = await asyncio.to_thread(
-                subprocess.run,
-                ["osascript", "-e", 'tell application "Finder" to get bounds of window of desktop'],
-                capture_output=True,
-                text=True,
-                timeout=settings.window_layout_timeout_sec,
-                check=False,
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("failed to read macos screen bounds", extra={"error": str(exc)})
-            return None
-        if result.returncode != 0:
-            logger.warning(
-                "read macos screen bounds returned non-zero status",
-                extra={"returncode": result.returncode, "stderr": result.stderr.strip()},
-            )
-            return None
-        numbers = [int(item) for item in re.findall(r"-?\d+", result.stdout)]
-        if len(numbers) < 4:
-            return None
-        left, top, right, bottom = numbers[:4]
-        if right <= left or bottom <= top:
-            return None
-        return left, top, right, bottom
+        runtime_policy = {
+            "min_window_width": min_width,
+            "min_window_height": min_height,
+        }
+        plan = SlotLayoutCalculator.build_plan(
+            slot_limit=slot_limit,
+            runtime_policy=runtime_policy,
+            screen_bounds=BatchService._normalize_screen_bounds(screen_bounds),
+        )
+        windows = [SlotWindow(slot_index=index, pid=pid) for index, pid in enumerate(pids)]
+        return MacOsWindowLayoutDriver.build_script(windows=windows, plan=plan)
 
     @staticmethod
-    def _estimate_visual_slot_capacity(screen_bounds: tuple[int, int, int, int] | None) -> int:
-        if not screen_bounds:
-            return settings.max_slot_limit
+    def _estimate_visual_slot_capacity(screen_bounds: ScreenBounds | tuple[int, int, int, int] | None) -> int:
+        return SlotLayoutCalculator.estimate_capacity(BatchService._normalize_screen_bounds(screen_bounds))
+
+    @staticmethod
+    def _window_grid(window_count: int) -> tuple[int, int]:
+        return SlotLayoutCalculator.grid_for_slots(window_count)
+
+    @staticmethod
+    def _normalize_screen_bounds(
+        screen_bounds: ScreenBounds | tuple[int, int, int, int] | None,
+    ) -> ScreenBounds | None:
+        if screen_bounds is None or isinstance(screen_bounds, ScreenBounds):
+            return screen_bounds
         left, top, right, bottom = screen_bounds
-        usable_width = max(1, right - left - settings.window_layout_margin_px)
-        usable_height = max(
-            1,
-            bottom - top - settings.window_layout_bottom_reserved_px - settings.window_layout_margin_px,
-        )
-        columns = max(
-            1,
-            usable_width // (settings.window_layout_min_width + settings.window_layout_margin_px),
-        )
-        rows = max(
-            1,
-            usable_height // (settings.window_layout_min_height + settings.window_layout_margin_px),
-        )
-        return max(1, min(settings.max_slot_limit, int(columns * rows)))
+        return ScreenBounds(left=left, top=top, right=right, bottom=bottom)
 
     async def _resolve_profiles(
         self,
@@ -1139,7 +1019,7 @@ end tell
         if strict and not validation.valid:
             raise ValueError(self._validation_error_message(validation))
         if strict and empty_reason:
-            raise ValueError("Provider 管理范围或流程 Profile 组未命中任何 Profile")
+            raise ValueError("Provider 管理范围或流程指纹窗口组未命中任何指纹窗口")
         batch.result_summary_json = {
             **(batch.result_summary_json or {}),
             "profile_mapping": validation.model_dump(mode="json"),
@@ -1198,9 +1078,9 @@ end tell
         if validation.duplicate_profile_ids:
             messages.append(f"profile_id 重复: {', '.join(validation.duplicate_profile_ids[:10])}")
         if validation.out_of_scope_profile_ids:
-            messages.append(f"profile_id 在当前指纹浏览器的流程运行 Profile 组内不存在: {', '.join(validation.out_of_scope_profile_ids[:10])}")
+            messages.append(f"profile_id 在当前指纹浏览器的流程运行指纹窗口组内不存在: {', '.join(validation.out_of_scope_profile_ids[:10])}")
         if validation.missing_profile_ids:
-            messages.append(f"Excel 缺少流程 Profile 组内的 profile_id: {', '.join(validation.missing_profile_ids[:10])}")
+            messages.append(f"Excel 缺少流程指纹窗口组内的 profile_id: {', '.join(validation.missing_profile_ids[:10])}")
         if validation.warnings:
             messages.extend(validation.warnings)
         return "；".join(messages) or "Excel 与流程 Profile 映射校验失败"

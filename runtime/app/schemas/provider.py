@@ -71,6 +71,7 @@ class ProviderProfileRef(BaseModel):
     provider_type: str
     external_profile_id: str
     display_name: str
+    remark: str | None = None
     group_summary: dict[str, Any] = Field(default_factory=dict)
     tag_summary: list[dict[str, Any]] = Field(default_factory=list)
     proxy_summary: dict[str, Any] = Field(default_factory=dict)

@@ -68,7 +68,7 @@ class Settings(BaseSettings):
     window_layout_top_offset_px: int = 30
     window_layout_bottom_reserved_px: int = 40
     window_layout_min_width: int = 320
-    window_layout_min_height: int = 360
+    window_layout_min_height: int = 280
     window_layout_default_width: int = 500
     window_layout_default_height: int = 500
     window_layout_provider_deviation_px: int = 50

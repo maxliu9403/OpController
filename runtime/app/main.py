@@ -26,7 +26,7 @@ async def lifespan(app: FastAPI):
     runtime.system_service.ensure_directories()
     await init_db()
     async with SessionLocal() as session:
-        await runtime.seed_service.seed_builtin_workflows(session)
+        await runtime.seed_service.remove_builtin_workflows(session)
     await runtime.batch_service.recover_interrupted_batches()
     runtime.schedule_service.start()
     await runtime.schedule_service.load_existing()

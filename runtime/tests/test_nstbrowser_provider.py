@@ -151,6 +151,7 @@ async def test_nstbrowser_profile_mapping(monkeypatch: pytest.MonkeyPatch) -> No
                 "group": {"groupId": "g-1", "name": "美区账号"},
                 "proxyConfig": {"proxyType": "http", "host": "1.2.3.4", "port": 8000},
                 "tags": ["vip"],
+                "description": "NST 养号窗口",
             }
         ]
 
@@ -163,6 +164,7 @@ async def test_nstbrowser_profile_mapping(monkeypatch: pytest.MonkeyPatch) -> No
     profile = result.profiles[0]
     assert profile.external_profile_id == "p-1"
     assert profile.display_name == "运营账号 1"
+    assert profile.remark == "NST 养号窗口"
     assert profile.group_summary == {"id": "g-1", "name": "美区账号"}
     assert profile.proxy_summary == {"type": "http", "ip": "1.2.3.4", "port": 8000}
 

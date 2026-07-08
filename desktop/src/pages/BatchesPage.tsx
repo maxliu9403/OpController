@@ -1,4 +1,4 @@
-import { Alert, Button, Form, InputNumber, Modal, Select, Space, Spin, Table, Typography, Upload, message } from "antd";
+import { Button, Form, InputNumber, Modal, Select, Space, Spin, Table, Typography, Upload, message } from "antd";
 import type { UploadProps } from "antd";
 import { Download, UploadCloud } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -31,7 +31,7 @@ function countProfilesInGroups(profiles: ProfileRecord[] | null | undefined, gro
 
 function groupSummaryLabel(groups: ProviderGroupRecord[] | null | undefined, groupIds: string[]) {
   if (!groupIds.length) {
-    return "未关联 Profile 组";
+    return "未绑定指纹窗口组";
   }
   const nameById = new Map((groups ?? []).map((group) => [String(group.external_group_id), group.display_name]));
   return groupIds
@@ -163,15 +163,15 @@ export function BatchesPage() {
       return;
     }
     if (!selectedWorkflowGroupIds.length) {
-      message.error("当前流程未关联 Profile 组，无法启动批次。请先到流程列表里点击“关联 Profile 组”。");
+      message.error("当前流程未绑定指纹窗口组，无法启动批次。请先到流程列表里点击“关联指纹窗口组”。");
       return;
     }
     if (providerProfiles.loading || providerGroups.loading) {
-      message.info("正在读取流程绑定的 Profile 组，请稍等几秒后再启动。");
+      message.info("正在读取流程绑定的指纹窗口组，请稍等几秒后再启动。");
       return;
     }
     if (selectedWorkflowProfileCount <= 0) {
-      message.error("当前流程绑定的 Profile 组没有命中可管理 Profile，请检查 Provider 管理范围。");
+      message.error("当前流程绑定的指纹窗口组没有命中可管理指纹窗口，请检查 Provider 管理范围。");
       return;
     }
     Modal.confirm({
@@ -182,8 +182,8 @@ export function BatchesPage() {
         <Space direction="vertical" size={8}>
           <Typography.Text>流程：{selectedWorkflow.name}</Typography.Text>
           <Typography.Text>指纹浏览器：{selectedWorkflowProviderLabel}</Typography.Text>
-          <Typography.Text>Profile 组：{selectedWorkflowGroupSummary}</Typography.Text>
-          <Typography.Text>可运行 Profile：{selectedWorkflowProfileCount} 个</Typography.Text>
+          <Typography.Text>指纹窗口组：{selectedWorkflowGroupSummary}</Typography.Text>
+          <Typography.Text>可运行指纹窗口：{selectedWorkflowProfileCount} 个</Typography.Text>
           <Typography.Text>并发槽位：{form.getFieldValue("requested_slots") ?? 6}</Typography.Text>
         </Space>
       ),
@@ -250,7 +250,7 @@ export function BatchesPage() {
       }
       const groupIds = workflowRunGroupIds(workflow);
       if (!groupIds.length) {
-        throw new Error("当前流程未关联 Profile 组，无法重试。请先到流程列表里关联 Profile 组。");
+        throw new Error("当前流程未绑定指纹窗口组，无法重试。请先到流程列表里关联指纹窗口组。");
       }
       const [groups, profiles] = await Promise.all([
         api.listProviderGroups(batch.provider_type),
@@ -258,7 +258,7 @@ export function BatchesPage() {
       ]);
       const profileCount = countProfilesInGroups(profiles, groupIds);
       if (profileCount <= 0) {
-        throw new Error("当前流程绑定的 Profile 组没有命中可管理 Profile，请检查 Provider 管理范围。");
+        throw new Error("当前流程绑定的指纹窗口组没有命中可管理指纹窗口，请检查 Provider 管理范围。");
       }
       Modal.confirm({
         title: "确认重试这个失败批次？",
@@ -268,8 +268,8 @@ export function BatchesPage() {
           <Space direction="vertical" size={8}>
             <Typography.Text>流程：{workflow.name}</Typography.Text>
             <Typography.Text>指纹浏览器：{providerNameByType.get(batch.provider_type) ?? batch.provider_type}</Typography.Text>
-            <Typography.Text>Profile 组：{groupSummaryLabel(groups, groupIds)}</Typography.Text>
-            <Typography.Text>可运行 Profile：{profileCount} 个</Typography.Text>
+            <Typography.Text>指纹窗口组：{groupSummaryLabel(groups, groupIds)}</Typography.Text>
+            <Typography.Text>可运行指纹窗口：{profileCount} 个</Typography.Text>
             <Typography.Text>表格数据：{batch.total_rows} 行</Typography.Text>
             <Typography.Text type="secondary">重试会清理该批次旧的运行记录，并按当前流程和原表格重新执行。</Typography.Text>
           </Space>
@@ -304,40 +304,60 @@ export function BatchesPage() {
   }
 
   return (
-    <Space direction="vertical" size={24} style={{ width: "100%" }}>
-      <SectionCard title="批次导入与启动" subtitle="先导入数据，再绑定流程模板和 Provider，最后配置可视槽位数。">
-        <Alert
-          showIcon
-          type="info"
-          style={{ marginBottom: 14 }}
-          message="Excel 必须包含 profile_id 列"
-          description="每一行 profile_id 会绑定一个指纹浏览器窗口，槽位数只控制同时打开数量。模板可在批量文件区域下载。"
-        />
+    <div className="app-page batches-page task-subpage">
+      <SectionCard title="即时任务" subtitle="导入 Excel 后立即生成批次，系统按槽位打开并执行指纹窗口。">
         <Form
           form={form}
           layout="vertical"
           initialValues={{ requested_slots: 6 }}
         >
-          <Space align="start" size={24} wrap>
-            <Form.Item label="Provider" name="provider_type">
-              <Select style={{ width: 200 }} options={providerOptions} />
-            </Form.Item>
-            <Form.Item label="流程模板" name="workflow_id">
-              <Select style={{ width: 280 }} options={workflowOptions} />
-            </Form.Item>
-            <Form.Item label="槽位数" name="requested_slots">
-              <InputNumber min={1} max={10} />
-            </Form.Item>
-            <Form.Item label="批量文件">
-              <Space direction="vertical" size={6}>
+          <div className="instant-task-designer">
+            <div className="task-config-card task-config-card--wide">
+              <div className="task-config-card__head">
+                <div>
+                  <Typography.Text className="section-eyebrow">执行对象</Typography.Text>
+                  <Typography.Title level={5}>选择要运行的流程</Typography.Title>
+                </div>
+              </div>
+              <div className="task-form-grid">
+                <Form.Item label="指纹浏览器" name="provider_type">
+                  <Select options={providerOptions} />
+                </Form.Item>
+                <Form.Item label="流程模板" name="workflow_id">
+                  <Select options={workflowOptions} />
+                </Form.Item>
+                <Form.Item label="并发槽位" name="requested_slots">
+                  <InputNumber min={1} max={10} style={{ width: "100%" }} />
+                </Form.Item>
+              </div>
+            </div>
+
+            <div className={`task-profile-summary${selectedWorkflowGroupIds.length ? " is-ready" : " is-warning"}`}>
+              <Typography.Text className="section-eyebrow">指纹窗口组</Typography.Text>
+              <Typography.Title level={5}>{selectedWorkflowGroupSummary}</Typography.Title>
+              <Typography.Paragraph>
+                {selectedWorkflowGroupIds.length
+                  ? `${selectedWorkflowProviderLabel} 下预计命中 ${selectedWorkflowProfileCount} 个可管理指纹窗口。`
+                  : "当前流程还没有绑定指纹窗口组，无法启动即时任务。"}
+              </Typography.Paragraph>
+            </div>
+
+            <div className="task-config-card">
+              <div className="task-config-card__head">
+                <div>
+                  <Typography.Text className="section-eyebrow">参数表格</Typography.Text>
+                  <Typography.Title level={5}>一行对应一个指纹窗口</Typography.Title>
+                </div>
+              </div>
+              <div className="task-upload-zone">
                 <Upload {...importProps}>
                   <Button icon={<UploadCloud size={16} />} loading={uploading}>
                     选择并导入 CSV / Excel
                   </Button>
                 </Upload>
-                {importedFileName ? (
-                  <Typography.Text type="secondary">{importedFileName}</Typography.Text>
-                ) : null}
+                <Typography.Text type="secondary">
+                  {importedFileName || "Excel 必须包含 profile_id 列，可下载流程参数模板后填写。"}
+                </Typography.Text>
                 <Button
                   type="text"
                   size="small"
@@ -347,21 +367,28 @@ export function BatchesPage() {
                 >
                   下载流程参数模板
                 </Button>
-              </Space>
-            </Form.Item>
-          </Space>
+              </div>
+            </div>
+          </div>
         </Form>
-        <Space>
-          <Button type="primary" onClick={() => void handleStart()}>
+
+        <div className="task-submit-bar">
+          <div>
+            <Typography.Text strong>启动前系统会再次校验 Provider、指纹窗口组和 Excel 映射。</Typography.Text>
+            <Typography.Paragraph>槽位只控制同时打开窗口数量，全部合法行都会依次执行完成。</Typography.Paragraph>
+          </div>
+          <Button type="primary" size="large" onClick={() => void handleStart()}>
             启动批次
           </Button>
-        </Space>
+        </div>
       </SectionCard>
 
-      <SectionCard title="批次列表" subtitle="Visual Mode 下会按槽位池打开、平铺、执行、关闭，并立即补位。">
+      <SectionCard title="即时任务列表" subtitle="Visual Mode 下会按槽位池打开、平铺、执行、关闭，并立即补位。">
         <Table
+          className="task-list-table"
           rowKey="id"
           dataSource={batches.data ?? []}
+          pagination={{ pageSize: 8, showSizeChanger: true }}
           columns={[
             { title: "批次", dataIndex: "name" },
             {
@@ -409,6 +436,6 @@ export function BatchesPage() {
           ]}
         />
       </SectionCard>
-    </Space>
+    </div>
   );
 }

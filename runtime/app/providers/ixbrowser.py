@@ -8,6 +8,7 @@ import httpx
 
 from app.config import settings
 from app.providers.base import BrowserProvider
+from app.providers.profile_fields import profile_remark
 from app.schemas.provider import (
     ProfileSyncResult,
     ProviderCapability,
@@ -122,6 +123,7 @@ class IxBrowserProvider(BrowserProvider):
                     provider_type=self.provider_type,
                     external_profile_id=str(row["profile_id"]),
                     display_name=row.get("name") or f"Profile {row['profile_id']}",
+                    remark=profile_remark(row),
                     group_summary={
                         "id": row.get("group_id"),
                         "name": row.get("group_name"),

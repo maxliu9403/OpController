@@ -9,6 +9,7 @@ import httpx
 from app.config import settings
 from app.providers.base import BrowserProvider
 from app.providers.config_store import ProviderConfigStore
+from app.providers.profile_fields import profile_remark
 from app.schemas.provider import (
     ProfileSyncResult,
     ProviderCapability,
@@ -216,6 +217,7 @@ class NstBrowserProvider(BrowserProvider):
                     provider_type=self.provider_type,
                     external_profile_id=str(profile_id),
                     display_name=str(row.get("name") or f"Profile {profile_id}"),
+                    remark=profile_remark(row),
                     group_summary={
                         "id": str(group_id) if group_id not in (None, "") else None,
                         "name": group.get("name") if group else None,

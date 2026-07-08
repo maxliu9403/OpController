@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import WorkflowTemplateRecord
@@ -15,6 +15,16 @@ class SeedService:
         self.repo_root = repo_root
 
     async def seed_builtin_workflows(self, session: AsyncSession) -> None:
+        # V1 no longer creates demo flows automatically. Keep this method as a
+        # compatibility no-op because older startup code and tests may call it.
+        await self.remove_builtin_workflows(session)
+        return
+
+    async def remove_builtin_workflows(self, session: AsyncSession) -> None:
+        await session.execute(delete(WorkflowTemplateRecord).where(WorkflowTemplateRecord.is_builtin.is_(True)))
+        await session.commit()
+
+    async def seed_builtin_workflows_legacy(self, session: AsyncSession) -> None:
         templates_dir = self.repo_root / "shared" / "workflows" / "templates"
         if not templates_dir.exists():
             return

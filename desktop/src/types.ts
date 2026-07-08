@@ -88,6 +88,7 @@ export type ProfileRecord = {
   provider_type: string;
   external_profile_id: string;
   display_name: string;
+  remark?: string | null;
   group_summary: { id?: string | number; name?: string };
   tag_summary: Array<{ id?: string | number; raw?: string }>;
   proxy_summary: { type?: string; ip?: string; port?: string };

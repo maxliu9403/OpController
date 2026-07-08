@@ -2,10 +2,13 @@ import { Alert, Button, Form, Input, Select, Space, Spin, Table, Tag, Typography
 import type { Key } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
+import { ProviderIcon } from "../components/ProviderIcon";
 import { SectionCard } from "../components/SectionCard";
 import { StatusBadge } from "../components/StatusBadge";
-import { usePolling } from "../hooks/usePolling";
-import type { ProfileRecord, ProviderConfig, ProviderScope } from "../types";
+import { setPollingCache, usePolling } from "../hooks/usePolling";
+import type { ProfileRecord, ProviderConfig, ProviderHealth, ProviderInfo, ProviderScope } from "../types";
+
+const STARTED_PROVIDERS_SESSION_KEY = "opcontroller.started_providers";
 
 function profileGroupId(profile: ProfileRecord) {
   const raw = profile.group_summary?.id;
@@ -54,6 +57,25 @@ function dedupe(values: string[]) {
   return Array.from(new Set(values.filter(Boolean).map(String)));
 }
 
+function readStartedProviders() {
+  if (typeof window === "undefined") {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(window.sessionStorage.getItem(STARTED_PROVIDERS_SESSION_KEY) ?? "[]");
+    return Array.isArray(parsed) ? dedupe(parsed.map(String)) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeStartedProviders(providerTypes: string[]) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.sessionStorage.setItem(STARTED_PROVIDERS_SESSION_KEY, JSON.stringify(dedupe(providerTypes)));
+}
+
 const MASKED_SECRET = "********";
 
 function credentialStatusTag(config: ProviderConfig | null | undefined) {
@@ -69,6 +91,8 @@ function credentialStatusTag(config: ProviderConfig | null | undefined) {
 export function ProvidersPage() {
   const providers = usePolling(api.listProviders, { intervalMs: 10000, cacheKey: "providers:list" });
   const [selectedProviderType, setSelectedProviderType] = useState("ixbrowser");
+  const [startedProviderTypes, setStartedProviderTypes] = useState<string[]>(readStartedProviders);
+  const [manualHealth, setManualHealth] = useState<Record<string, ProviderHealth>>({});
   const [profileReloadKey, setProfileReloadKey] = useState(0);
   const [scopeReloadKey, setScopeReloadKey] = useState(0);
   const [groupReloadKey, setGroupReloadKey] = useState(0);
@@ -101,20 +125,21 @@ export function ProvidersPage() {
     () => api.getProviderConfig(selectedProviderType),
     [selectedProviderType, configReloadKey],
   );
+  const isSelectedProviderStarted = startedProviderTypes.includes(selectedProviderType);
   const groups = usePolling(groupsFetcher, {
     intervalMs: 10000,
     cacheKey: `provider:${selectedProviderType}:groups`,
-    enabled: Boolean(selectedProviderType),
+    enabled: Boolean(selectedProviderType && isSelectedProviderStarted),
   });
   const profiles = usePolling(profilesFetcher, {
     intervalMs: 10000,
     cacheKey: `provider:${selectedProviderType}:profiles:all`,
-    enabled: Boolean(selectedProviderType),
+    enabled: Boolean(selectedProviderType && isSelectedProviderStarted),
   });
   const scope = usePolling(scopeFetcher, {
     intervalMs: 10000,
     cacheKey: `provider:${selectedProviderType}:scope`,
-    enabled: Boolean(selectedProviderType),
+    enabled: Boolean(selectedProviderType && isSelectedProviderStarted),
   });
   const providerConfig = usePolling(configFetcher, {
     intervalMs: 10000,
@@ -130,6 +155,23 @@ export function ProvidersPage() {
       setSelectedProviderType(providers.data[0].provider_type);
     }
   }, [providers.data, selectedProviderType]);
+
+  useEffect(() => {
+    writeStartedProviders(startedProviderTypes);
+  }, [startedProviderTypes]);
+
+  useEffect(() => {
+    const healthyProviderTypes = (providers.data ?? [])
+      .filter((provider) => provider.health.healthy)
+      .map((provider) => provider.provider_type);
+    if (!healthyProviderTypes.length) {
+      return;
+    }
+    setStartedProviderTypes((current) => {
+      const next = dedupe([...current, ...healthyProviderTypes]);
+      return next.length === current.length ? current : next;
+    });
+  }, [providers.data]);
 
   useEffect(() => {
     setDraftScope(normalizeScope(scope.data, selectedProviderType));
@@ -177,6 +219,7 @@ export function ProvidersPage() {
       if (search) {
         const haystack = [
           profile.display_name,
+          profile.remark,
           profile.external_profile_id,
           profile.group_summary?.name,
           profile.proxy_summary?.ip,
@@ -213,6 +256,21 @@ export function ProvidersPage() {
     () => (providers.data ?? []).find((item) => item.provider_type === selectedProviderType) ?? null,
     [providers.data, selectedProviderType],
   );
+  const selectedProviderHealth = manualHealth[selectedProviderType] ?? selectedProviderInfo?.health ?? null;
+  const updateProviderHealthCache = (providerType: string, health: ProviderHealth) => {
+    if (!providers.data?.length) {
+      return;
+    }
+    const nextProviders: ProviderInfo[] = providers.data.map((provider) =>
+      provider.provider_type === providerType ? { ...provider, health } : provider,
+    );
+    setPollingCache("providers:list", nextProviders);
+  };
+  const selectProvider = (providerType: string) => {
+    setSelectedProviderType(providerType);
+    setGroupFilter(null);
+    setSelectedProfileIds([]);
+  };
 
   const handleIncludeSelected = () => {
     updateDraftScope((current) => ({
@@ -241,18 +299,22 @@ export function ProvidersPage() {
   };
 
   const handleSync = useCallback(async () => {
+    if (!isSelectedProviderStarted) {
+      message.warning("请先启动当前 Provider，再同步指纹窗口。");
+      return;
+    }
     setSyncing(true);
     try {
       await api.syncProfiles(selectedProviderType);
       setProfileReloadKey((value) => value + 1);
       setGroupReloadKey((value) => value + 1);
-      message.success("分组和 Profile 已从指纹浏览器同步");
+      message.success("分组和指纹窗口已从指纹浏览器同步");
     } catch (cause) {
       message.error(cause instanceof Error ? cause.message : "同步失败");
     } finally {
       setSyncing(false);
     }
-  }, [selectedProviderType]);
+  }, [isSelectedProviderStarted, selectedProviderType]);
 
   const handleSaveConfig = async () => {
     if (!providerConfig.data?.fields.length) {
@@ -271,7 +333,7 @@ export function ProvidersPage() {
     }
   };
 
-  const handleHealthCheck = async () => {
+  const runProviderHealthCheck = async () => {
     setCheckingHealth(true);
     try {
       if (providerConfig.data?.fields.length) {
@@ -279,17 +341,47 @@ export function ProvidersPage() {
         await api.updateProviderConfig(selectedProviderType, values);
       }
       const result = await api.providerHealthCheck(selectedProviderType);
+      setManualHealth((current) => ({ ...current, [selectedProviderType]: result }));
+      updateProviderHealthCache(selectedProviderType, result);
       if (result.healthy) {
         message.success(result.message || "Provider 可用");
       } else {
         message.warning(result.message || "Provider 未就绪");
       }
       setConfigReloadKey((value) => value + 1);
+      return result;
     } catch (cause) {
       message.error(cause instanceof Error ? cause.message : "连通性测试失败");
+      return null;
     } finally {
       setCheckingHealth(false);
     }
+  };
+
+  const handleHealthCheck = async () => {
+    await runProviderHealthCheck();
+  };
+
+  const handleStartProvider = async (providerType: string) => {
+    if (providerType !== selectedProviderType) {
+      selectProvider(providerType);
+      message.info("已切换 Provider，请确认下方配置后再次点击启动。");
+      return;
+    }
+    const result = await runProviderHealthCheck();
+    if (!result) {
+      return;
+    }
+    setManualHealth((current) => ({ ...current, [providerType]: result }));
+    updateProviderHealthCache(providerType, result);
+    if (!result.healthy) {
+      setStartedProviderTypes((current) => current.filter((item) => item !== providerType));
+      return;
+    }
+    setStartedProviderTypes((current) => (current.includes(providerType) ? current : [...current, providerType]));
+    setGroupReloadKey((value) => value + 1);
+    setProfileReloadKey((value) => value + 1);
+    setScopeReloadKey((value) => value + 1);
   };
 
   const handleSecretVisibleChange = async (fieldKey: string, visible: boolean) => {
@@ -350,7 +442,7 @@ export function ProvidersPage() {
       });
       setScopeReloadKey((value) => value + 1);
       setProfileReloadKey((value) => value + 1);
-      message.success("已恢复默认：全部 Profile 纳入管理");
+      message.success("已恢复默认：全部指纹窗口纳入管理");
     } catch (cause) {
       message.error(cause instanceof Error ? cause.message : "恢复失败");
     } finally {
@@ -358,15 +450,20 @@ export function ProvidersPage() {
     }
   };
 
-  if (providers.loading || groups.loading || profiles.loading || scope.loading || providerConfig.loading || !draftScope) {
+  if (
+    providers.loading ||
+    providerConfig.loading ||
+    (isSelectedProviderStarted && (groups.loading || profiles.loading || scope.loading)) ||
+    !draftScope
+  ) {
     return <Spin size="large" />;
   }
 
   return (
     <Space direction="vertical" size={24} style={{ width: "100%" }}>
       <SectionCard
-        title="Provider 管理"
-        subtitle="配置哪些指纹浏览器分组和窗口进入 OpController 的批次、定时与流程编排范围。"
+        title="Provider 启动"
+        subtitle="先选择要接入的指纹浏览器。需要 API Key 或本地地址的 Provider，先配置参数再启动。"
         extra={
           <Space wrap>
             <Select
@@ -374,30 +471,81 @@ export function ProvidersPage() {
               value={selectedProviderType}
               options={providerOptions}
               onChange={(value) => {
-                setSelectedProviderType(value);
-                setGroupFilter(null);
-                setSelectedProfileIds([]);
+                selectProvider(value);
               }}
             />
             <Button type="primary" loading={syncing} onClick={() => void handleSync()}>
-              同步指纹浏览器
+              同步指纹窗口
             </Button>
           </Space>
         }
       >
         <Space direction="vertical" size={16} style={{ width: "100%" }}>
-          <Alert
-            type={effectiveScope.is_configured ? "warning" : "info"}
-            showIcon
-            message={effectiveScope.is_configured ? "当前启用了管理范围" : "当前默认管理全部 Profile"}
-            description={
-              effectiveScope.is_configured
-                ? "Profile 管理清单只展示管理分组内的窗口；显式排除仍会显示，方便随时恢复。"
-                : "尚未保存自定义范围，所有已同步 Profile 都会被视为可管理。"
-            }
-          />
+          <div className="provider-start-grid">
+            {(providers.data ?? []).map((provider) => {
+              const health = manualHealth[provider.provider_type] ?? provider.health;
+              const started = startedProviderTypes.includes(provider.provider_type);
+              const needsConfig = health.details?.status === "idle" && provider.provider_type !== "ixbrowser";
+              return (
+                <article
+                  key={provider.provider_type}
+                  role="button"
+                  tabIndex={0}
+                  className={[
+                    "provider-start-card",
+                    provider.provider_type === selectedProviderType ? "is-selected" : "",
+                    started ? "is-started" : "",
+                  ].filter(Boolean).join(" ")}
+                  onClick={() => selectProvider(provider.provider_type)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      selectProvider(provider.provider_type);
+                    }
+                  }}
+                >
+                  <div className="provider-start-card__head">
+                    <ProviderIcon providerType={provider.provider_type} displayName={provider.display_name} />
+                    <div>
+                      <strong>{provider.display_name}</strong>
+                      <span>{provider.provider_type}</span>
+                    </div>
+                    <StatusBadge
+                      status={started ? "healthy" : health.healthy ? "healthy" : "pending"}
+                      label={started ? "已启动" : health.healthy ? "可用" : "未启动"}
+                    />
+                  </div>
+                  {provider.provider_type === selectedProviderType ? (
+                    <Tag color={effectiveScope.is_configured ? "gold" : "blue"}>
+                      {effectiveScope.is_configured ? "已设管理范围" : "默认全部管理"}
+                    </Tag>
+                  ) : null}
+                  <p>{needsConfig ? "需要参数配置后启动" : health.message}</p>
+                  <Button
+                    size="small"
+                    type={started ? "default" : "primary"}
+                    loading={checkingHealth && selectedProviderType === provider.provider_type}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void handleStartProvider(provider.provider_type);
+                    }}
+                  >
+                    {started ? "重新检查" : "启动"}
+                  </Button>
+                </article>
+              );
+            })}
+          </div>
+          {!isSelectedProviderStarted ? (
+            <Alert
+              type="warning"
+              showIcon
+              message="请先启动 Provider"
+              description="启动后才会读取该 Provider 的分组、指纹窗口和会话状态。"
+            />
+          ) : null}
           <Space wrap>
-            <Tag color="cyan">已同步 Profiles {(profiles.data ?? []).length}</Tag>
+            <Tag color="cyan">已同步指纹窗口 {(profiles.data ?? []).length}</Tag>
             <Tag color="blue">当前纳入管理 {managedCount}</Tag>
             <Tag color="purple">分组 {(groups.data ?? []).length}</Tag>
             <Tag color="gold">显式纳入 {effectiveScope.include_profile_ids.length}</Tag>
@@ -416,6 +564,12 @@ export function ProvidersPage() {
         extra={
           <Space wrap>
             {credentialStatusTag(providerConfig.data)}
+            {selectedProviderHealth ? (
+              <StatusBadge
+                status={selectedProviderHealth.healthy ? "healthy" : "unhealthy"}
+                label={selectedProviderHealth.healthy ? "已连通" : "未连通"}
+              />
+            ) : null}
             <Button loading={checkingHealth} onClick={() => void handleHealthCheck()}>
               测试连通性
             </Button>
@@ -467,14 +621,7 @@ export function ProvidersPage() {
               />
             ) : null}
           </Form>
-        ) : (
-          <Alert
-            type="info"
-            showIcon
-            message={`${selectedProviderInfo?.display_name ?? selectedProviderType} 暂无额外配置项`}
-            description="如果后续 Provider 需要 API Key、端口或本地地址，会在这里自动出现配置表单。"
-          />
-        )}
+        ) : null}
       </SectionCard>
 
       <SectionCard
@@ -491,6 +638,14 @@ export function ProvidersPage() {
           </Space>
         }
       >
+        {!isSelectedProviderStarted ? (
+          <Alert
+            type="warning"
+            showIcon
+            message="请先启动 Provider"
+            description="启动成功后才能读取分组并保存管理范围。"
+          />
+        ) : null}
         <Space direction="vertical" size={16} style={{ width: "100%" }}>
           <div>
             <Typography.Text type="secondary">分组白名单</Typography.Text>
@@ -503,6 +658,7 @@ export function ProvidersPage() {
               value={effectiveScope.is_configured ? effectiveScope.managed_group_ids : []}
               options={groupOptions}
               placeholder="选择允许 OpController 管理的指纹浏览器分组"
+              disabled={!isSelectedProviderStarted}
               onChange={(values) =>
                 updateDraftScope((current) => ({
                   ...current,
@@ -513,13 +669,13 @@ export function ProvidersPage() {
             />
           </div>
           <Space wrap>
-            <Button disabled={!selectedProfileIds.length} onClick={handleIncludeSelected}>
+            <Button disabled={!isSelectedProviderStarted || !selectedProfileIds.length} onClick={handleIncludeSelected}>
               纳入所选窗口
             </Button>
-            <Button danger disabled={!selectedProfileIds.length} onClick={handleExcludeSelected}>
+            <Button danger disabled={!isSelectedProviderStarted || !selectedProfileIds.length} onClick={handleExcludeSelected}>
               排除所选窗口
             </Button>
-            <Button disabled={!selectedProfileIds.length} onClick={handleClearExceptions}>
+            <Button disabled={!isSelectedProviderStarted || !selectedProfileIds.length} onClick={handleClearExceptions}>
               清除所选窗口例外
             </Button>
           </Space>
@@ -527,9 +683,17 @@ export function ProvidersPage() {
       </SectionCard>
 
       <SectionCard
-        title="Profile 管理清单"
-        subtitle={effectiveScope.is_configured ? "这里只展示管理范围配置中的分组 Profile。" : "尚未配置范围，当前展示全部已同步 Profile。"}
+        title="指纹窗口管理清单"
+        subtitle={effectiveScope.is_configured ? "这里只展示管理范围配置中的分组指纹窗口。" : "尚未配置范围，当前展示全部已同步指纹窗口。"}
       >
+        {!isSelectedProviderStarted ? (
+          <Alert
+            type="warning"
+            showIcon
+            message="当前 Provider 未启动，暂不加载指纹窗口"
+            description="这能避免 NSTBrowser、BitBrowser 等需要参数的 Provider 在未配置前自动报错。"
+          />
+        ) : null}
         <Space direction="vertical" size={16} style={{ width: "100%" }}>
           <Space wrap>
             <Select
@@ -545,7 +709,7 @@ export function ProvidersPage() {
             <Input.Search
               allowClear
               style={{ width: 280 }}
-              placeholder="搜索名称、ID、分组、代理"
+              placeholder="搜索名称、备注、ID、分组、代理"
               value={profileSearch}
               onChange={(event) => setProfileSearch(event.target.value)}
             />
@@ -554,6 +718,7 @@ export function ProvidersPage() {
           <Table
             rowKey="external_profile_id"
             dataSource={filteredProfiles}
+            locale={{ emptyText: isSelectedProviderStarted ? "暂无指纹窗口" : "请先启动 Provider" }}
             rowSelection={{
               selectedRowKeys: selectedProfileIds,
               onChange: setSelectedProfileIds,
@@ -561,6 +726,12 @@ export function ProvidersPage() {
             pagination={{ pageSize: 12, showSizeChanger: true }}
             columns={[
               { title: "名称", dataIndex: "display_name" },
+              {
+                title: "备注",
+                dataIndex: "remark",
+                ellipsis: true,
+                render: (value?: string | null) => value || "--",
+              },
               { title: "外部 ID", dataIndex: "external_profile_id", width: 120 },
               { title: "分组", render: (_, item) => item.group_summary?.name ?? "--" },
               {

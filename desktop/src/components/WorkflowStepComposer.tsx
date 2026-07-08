@@ -281,7 +281,7 @@ export function WorkflowStepComposer({
       return;
     }
     if (!previewAvailable) {
-      message.warning("请先打开测试 Profile，再从真实页面点选元素。");
+      message.warning("请先打开测试指纹窗口，再从真实页面点选元素。");
       return;
     }
     try {
@@ -396,11 +396,11 @@ export function WorkflowStepComposer({
           <Alert
             type={previewAvailable ? "success" : "warning"}
             showIcon
-            message={previewAvailable ? `当前测试会话: ${testSessionLabel}` : "还没有打开测试 Profile"}
+            message={previewAvailable ? `当前测试会话: ${testSessionLabel}` : "还没有打开测试指纹窗口"}
             description={
               previewAvailable
                 ? "你现在可以从真实页面点选元素、自动生成定位规则，并做单步试跑。"
-                : "请先在流程页顶部选择一个测试 Profile 并打开它，否则这里只能生成规则，不能在真实页面验证。"
+                : "请先在流程页顶部选择一个测试指纹窗口并打开它，否则这里只能生成规则，不能在真实页面验证。"
             }
           />
 

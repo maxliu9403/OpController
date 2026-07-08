@@ -109,6 +109,7 @@ async def test_bitbrowser_profile_and_group_mapping(monkeypatch: pytest.MonkeyPa
                     "host": "1.2.3.4",
                     "port": 8000,
                     "tagName": "vip",
+                    "remark": "店铺 A 主账号",
                 }
             ]
         if path == "/group/list":
@@ -126,6 +127,7 @@ async def test_bitbrowser_profile_and_group_mapping(monkeypatch: pytest.MonkeyPa
     profile = result.profiles[0]
     assert profile.external_profile_id == "b-1"
     assert profile.display_name == "运营账号 1"
+    assert profile.remark == "店铺 A 主账号"
     assert profile.group_summary == {"id": "g-1", "name": "美区账号"}
     assert profile.proxy_summary == {"type": "socks5", "ip": "1.2.3.4", "port": 8000}
     assert groups[0].external_group_id == "g-1"
@@ -175,7 +177,17 @@ async def test_bitbrowser_open_close_sessions_and_arrange(monkeypatch: pytest.Mo
     sessions = await provider.list_opened_sessions()
     await provider.close_profile("b-1")
     await provider.reset_open_state("b-1")
-    await provider.arrange_windows({"ids": ["b-1"], "col": 1})
+    await provider.arrange_windows(
+        {
+            "ids": ["b-1"],
+            "starting_position_x": 10,
+            "starting_position_y": 40,
+            "profile_size_width": 420,
+            "profile_size_hight": 400,
+            "per_line_number_of_profiles": 3,
+            "screen": 0,
+        }
+    )
 
     assert opened.ws_endpoint == "ws://127.0.0.1:53325/devtools/browser/abc"
     assert opened.debugging_address == "127.0.0.1:53325"
@@ -187,7 +199,11 @@ async def test_bitbrowser_open_close_sessions_and_arrange(monkeypatch: pytest.Mo
     arrange_call = calls[-1]
     assert arrange_call[0] == "/windowbounds"
     assert arrange_call[1]["ids"] == ["b-1"]
-    assert arrange_call[1]["col"] == 1
+    assert arrange_call[1]["startX"] == 10
+    assert arrange_call[1]["startY"] == 40
+    assert arrange_call[1]["width"] == 420
+    assert arrange_call[1]["height"] == 400
+    assert arrange_call[1]["col"] == 3
 
 
 def test_bitbrowser_page_rows_accepts_common_shapes() -> None:

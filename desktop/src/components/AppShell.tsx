@@ -3,7 +3,6 @@ import {
   Activity,
   CalendarClock,
   Command,
-  Layers3,
   LayoutDashboard,
   Moon,
   RadioTower,
@@ -22,9 +21,8 @@ const items = [
   { key: "/", label: <Link to="/">概览</Link>, icon: <LayoutDashboard size={16} /> },
   { key: "/providers", label: <Link to="/providers">Provider</Link>, icon: <RadioTower size={16} /> },
   { key: "/workflows", label: <Link to="/workflows">流程编排</Link>, icon: <Command size={16} /> },
-  { key: "/batches", label: <Link to="/batches">批次</Link>, icon: <Layers3 size={16} /> },
+  { key: "/tasks", label: <Link to="/tasks">任务管理</Link>, icon: <CalendarClock size={16} /> },
   { key: "/monitor", label: <Link to="/monitor">监控</Link>, icon: <Activity size={16} /> },
-  { key: "/schedules", label: <Link to="/schedules">定时</Link>, icon: <CalendarClock size={16} /> },
   { key: "/results", label: <Link to="/results">结果</Link>, icon: <ScanSearch size={16} /> },
 ];
 
@@ -53,27 +51,14 @@ export function AppShell() {
 
     const warmCommonData = async () => {
       try {
-        const providersPromise = primePollingCache("providers:list", api.listProviders);
+        void primePollingCache("providers:list", api.listProviders).catch(() => undefined);
         void primePollingCache("system:check", api.systemCheck).catch(() => undefined);
         void primePollingCache("workflows:list:all", api.listWorkflows).catch(() => undefined);
         void primePollingCache("workflows:action-cards", api.listActionCards).catch(() => undefined);
         void primePollingCache("workflow-folders:list", api.listWorkflowFolders).catch(() => undefined);
         void primePollingCache("batches:list", api.listBatches).catch(() => undefined);
         void primePollingCache("schedules:list", api.listSchedules).catch(() => undefined);
-
-        const providers = await providersPromise;
-        if (cancelled) {
-          return;
-        }
-        const providerType = providers[0]?.provider_type;
-        if (!providerType) {
-          return;
-        }
-        void primePollingCache(`provider:${providerType}:groups`, () => api.listProviderGroups(providerType)).catch(() => undefined);
-        void primePollingCache(`provider:${providerType}:profiles:managed`, () => api.listProfiles(providerType, { managed_only: true })).catch(() => undefined);
-        void primePollingCache(`provider:${providerType}:profiles:all`, () => api.listProfiles(providerType)).catch(() => undefined);
-        void primePollingCache(`provider:${providerType}:scope`, () => api.getProviderScope(providerType)).catch(() => undefined);
-        void primePollingCache(`provider:${providerType}:sessions`, () => api.listProviderSessions(providerType)).catch(() => undefined);
+        if (cancelled) return;
       } catch {
         // 页面本身仍会按需加载；预热失败不影响正常使用。
       }

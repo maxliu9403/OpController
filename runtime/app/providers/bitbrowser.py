@@ -8,6 +8,7 @@ import httpx
 from app.config import settings
 from app.providers.base import BrowserProvider
 from app.providers.config_store import ProviderConfigStore
+from app.providers.profile_fields import profile_remark
 from app.schemas.provider import (
     ProfileSyncResult,
     ProviderCapability,
@@ -147,6 +148,7 @@ class BitBrowserProvider(BrowserProvider):
                     provider_type=self.provider_type,
                     external_profile_id=str(profile_id),
                     display_name=str(row.get("name") or row.get("remark") or f"Profile {profile_id}"),
+                    remark=profile_remark(row),
                     group_summary={
                         "id": str(group_id) if group_id not in (None, "") else None,
                         "name": row.get("groupName") or row.get("group_name"),
@@ -269,16 +271,26 @@ class BitBrowserProvider(BrowserProvider):
             payload["seqlist"] = layout["seqlist"]
         layout_key_map = {
             "startX": "startX",
+            "starting_position_x": "startX",
             "startY": "startY",
+            "starting_position_y": "startY",
             "width": "width",
+            "profile_size_width": "width",
             "height": "height",
+            "profile_size_hight": "height",
             "col": "col",
+            "per_line_number_of_profiles": "col",
             "spaceX": "spaceX",
+            "profile_spacing_horizontal": "spaceX",
             "spaceY": "spaceY",
+            "profile_spacing_vertical": "spaceY",
             "offsetX": "offsetX",
+            "profile_deviaton_x": "offsetX",
             "offsetY": "offsetY",
+            "profile_deviaton_y": "offsetY",
             "orderBy": "orderBy",
             "screenId": "screenId",
+            "screen": "screenId",
         }
         for source_key, target_key in layout_key_map.items():
             if source_key in layout and layout[source_key] is not None:

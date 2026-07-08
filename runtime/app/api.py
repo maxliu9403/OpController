@@ -243,7 +243,7 @@ async def pick_locator_once(
         payload.external_profile_id,
     )
     if not session_ref or not (session_ref.ws_endpoint or session_ref.debugging_address):
-        raise HTTPException(status_code=400, detail="测试 Profile 尚未打开，无法从真实页面点选元素")
+        raise HTTPException(status_code=400, detail="测试指纹窗口尚未打开，无法从真实页面点选元素")
 
     try:
         picked = await runtime.execution_service.pick_locator_once(
@@ -330,7 +330,7 @@ async def live_preview_locator(
         payload.external_profile_id,
     )
     if not session_ref or not (session_ref.ws_endpoint or session_ref.debugging_address):
-        raise HTTPException(status_code=400, detail="测试 Profile 尚未打开，无法做真实页面定位预览")
+        raise HTTPException(status_code=400, detail="测试指纹窗口尚未打开，无法做真实页面定位预览")
     return await runtime.execution_service.preview_locator(
         endpoint=session_ref.ws_endpoint or session_ref.debugging_address or "",
         locator=payload.locator,
@@ -531,7 +531,7 @@ async def dry_run_workflow(
         payload.external_profile_id,
     )
     if not session_ref or not (session_ref.ws_endpoint or session_ref.debugging_address):
-        raise HTTPException(status_code=400, detail="测试 Profile 尚未打开，无法做整条流程试运行")
+        raise HTTPException(status_code=400, detail="测试指纹窗口尚未打开，无法做整条流程试运行")
     try:
         return await runtime.execution_service.preview_workflow(
             endpoint=session_ref.ws_endpoint or session_ref.debugging_address or "",
@@ -553,7 +553,7 @@ async def preview_workflow_step(
         payload.external_profile_id,
     )
     if not session_ref or not (session_ref.ws_endpoint or session_ref.debugging_address):
-        raise HTTPException(status_code=400, detail="测试 Profile 尚未打开，无法做单步试跑")
+        raise HTTPException(status_code=400, detail="测试指纹窗口尚未打开，无法做单步试跑")
     return await runtime.execution_service.preview_step(
         endpoint=session_ref.ws_endpoint or session_ref.debugging_address or "",
         step=payload.step,

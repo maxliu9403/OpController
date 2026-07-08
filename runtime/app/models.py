@@ -64,6 +64,7 @@ class ProfileRecord(TimestampMixin, Base):
     provider_type: Mapped[str] = mapped_column(String(50), index=True)
     external_profile_id: Mapped[str] = mapped_column(String(128), index=True)
     display_name: Mapped[str] = mapped_column(String(255))
+    remark: Mapped[str | None] = mapped_column(Text, nullable=True)
     group_summary: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=dict)
     tag_summary: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, default=list)
     proxy_summary: Mapped[dict[str, Any] | None] = mapped_column(JSON, default=dict)

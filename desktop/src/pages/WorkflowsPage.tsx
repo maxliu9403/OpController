@@ -678,8 +678,8 @@ export function WorkflowsPage() {
       if (!groupIds.length) {
         return {
           color: "red",
-          label: "未关联 Profile 组",
-          detail: "不可启动",
+          label: "未绑定指纹窗口组",
+          detail: "流程不可启动",
           profileCount: 0,
           usable: false,
         };
@@ -688,7 +688,7 @@ export function WorkflowsPage() {
         return {
           color: "blue",
           label: `已关联 ${groupIds.length} 组`,
-          detail: "切换 Provider 后可查看数量",
+          detail: "切换 Provider 后可查看窗口数量",
           profileCount: null,
           usable: true,
         };
@@ -708,15 +708,15 @@ export function WorkflowsPage() {
       if (profileCount <= 0) {
         return {
           color: "red",
-          label: "未命中 Profile",
-          detail: "不可启动",
+          label: "未命中指纹窗口",
+          detail: "流程不可启动",
           profileCount,
           usable: false,
         };
       }
       return {
         color: "green",
-        label: `可启动 ${profileCount} Profiles`,
+        label: `可启动 ${profileCount} 个窗口`,
         detail: groupSummaryLabel(managedGroups, groupIds),
         profileCount,
         usable: true,
@@ -761,7 +761,7 @@ export function WorkflowsPage() {
     () =>
       filteredProfiles.map((profile) => ({
         value: profile.external_profile_id,
-        label: `${profile.display_name} (#${profile.external_profile_id})`,
+        label: `${profile.display_name}${profile.remark ? ` · ${profile.remark}` : ""} (#${profile.external_profile_id})`,
       })),
     [filteredProfiles],
   );
@@ -1242,7 +1242,7 @@ export function WorkflowsPage() {
             {currentProviderLabel} → {nextProviderLabel}
           </Typography.Text>
           <Typography.Text type="secondary">
-            切换后会清空当前流程已关联的 Profile 组，需要重新点击“Profile 组”选择新 Provider 下的运行分组。
+            切换后会清空当前流程已关联的指纹窗口组，需要重新点击“指纹窗口组”选择新 Provider 下的运行分组。
           </Typography.Text>
         </Space>
       ),
@@ -1272,7 +1272,7 @@ export function WorkflowsPage() {
           setGroupReloadKey((value) => value + 1);
           setProfileReloadKey((value) => value + 1);
           setSessionReloadKey((value) => value + 1);
-          message.success("流程 Provider 已切换，请重新关联 Profile 组。");
+          message.success("流程 Provider 已切换，请重新关联指纹窗口组。");
         } catch (cause) {
           message.error(cause instanceof Error ? cause.message : "切换 Provider 失败");
         } finally {
@@ -1310,9 +1310,9 @@ export function WorkflowsPage() {
       setWorkflowReloadKey((value) => value + 1);
       setProfileGroupModalWorkflow(null);
       setProfileGroupDraftIds([]);
-      message.success(cleanedGroupIds.length ? "运行 Profile 组已关联" : "已移除运行 Profile 组，流程将不可启动");
+      message.success(cleanedGroupIds.length ? "运行指纹窗口组已关联" : "已移除运行指纹窗口组，流程将不可启动");
     } catch (cause) {
-      message.error(cause instanceof Error ? cause.message : "关联 Profile 组失败");
+      message.error(cause instanceof Error ? cause.message : "关联指纹窗口组失败");
     } finally {
       setProfileGroupSaving(false);
     }
@@ -1446,9 +1446,9 @@ export function WorkflowsPage() {
       await api.syncProfiles(selectedProviderType);
       setProfileReloadKey((value) => value + 1);
       setGroupReloadKey((value) => value + 1);
-      message.success("分组和测试 Profile 列表已刷新");
+      message.success("分组和测试指纹窗口列表已刷新");
     } catch (cause) {
-      message.error(cause instanceof Error ? cause.message : "同步 Profile 失败");
+      message.error(cause instanceof Error ? cause.message : "同步指纹窗口失败");
     } finally {
       setSessionActionLoading(false);
     }
@@ -1456,16 +1456,16 @@ export function WorkflowsPage() {
 
   const handleOpenTestProfile = async () => {
     if (!selectedProfileId) {
-      message.warning("先选择一个测试 Profile");
+      message.warning("先选择一个测试指纹窗口");
       return;
     }
     setSessionActionLoading(true);
     try {
       await api.openTestProfile(selectedProviderType, selectedProfileId);
       setSessionReloadKey((value) => value + 1);
-      message.success("测试 Profile 已打开，现在可以做真实页面验证了");
+      message.success("测试指纹窗口已打开，现在可以做真实页面验证了");
     } catch (cause) {
-      message.error(cause instanceof Error ? cause.message : "打开测试 Profile 失败");
+      message.error(cause instanceof Error ? cause.message : "打开测试指纹窗口失败");
     } finally {
       setSessionActionLoading(false);
     }
@@ -1479,9 +1479,9 @@ export function WorkflowsPage() {
     try {
       await api.closeTestProfile(selectedProviderType, selectedProfileId);
       setSessionReloadKey((value) => value + 1);
-      message.success("测试 Profile 已关闭");
+      message.success("测试指纹窗口已关闭");
     } catch (cause) {
-      message.error(cause instanceof Error ? cause.message : "关闭测试 Profile 失败");
+      message.error(cause instanceof Error ? cause.message : "关闭测试指纹窗口失败");
     } finally {
       setSessionActionLoading(false);
     }
@@ -1666,7 +1666,7 @@ export function WorkflowsPage() {
 
   const handleLocatorPick = async (values: StepComposerValues): Promise<LocatorPickResult> => {
     if (!selectedProfileId || !selectedSession) {
-      throw new Error("请先打开一个测试 Profile，再从页面点选元素");
+      throw new Error("请先打开一个测试指纹窗口，再从页面点选元素");
     }
     return api.pickLocatorOnce({
       provider_type: selectedProviderType,
@@ -1683,7 +1683,7 @@ export function WorkflowsPage() {
       throw new Error("当前没有选中的动作卡片");
     }
     if (!selectedProfileId || !selectedSession) {
-      throw new Error("请先打开一个测试 Profile，再执行单步试跑");
+      throw new Error("请先打开一个测试指纹窗口，再执行单步试跑");
     }
       const stepPayload = buildStepPayload(selectedCard, values, {
       stepId: `${selectedCard.type}-preview`,
@@ -1703,7 +1703,7 @@ export function WorkflowsPage() {
 
   const handleDryRunWorkflow = async () => {
     if (!selectedProfileId || !selectedSession) {
-      message.warning("请先打开一个测试 Profile，再做整条流程试运行。");
+      message.warning("请先打开一个测试指纹窗口，再做整条流程试运行。");
       return;
     }
     if (!workflowDraft) {
@@ -1905,13 +1905,17 @@ export function WorkflowsPage() {
         ),
       },
       {
-        title: "Profile 组状态",
+        title: "指纹窗口组状态",
         key: "profile_groups",
         width: 260,
         render: (_, item) => {
           const bindingStatus = workflowProfileBindingStatus(item);
           return (
-            <Space direction="vertical" size={2} className="workflow-table-profile">
+            <Space
+              direction="vertical"
+              size={2}
+              className={`workflow-table-profile${bindingStatus.usable ? "" : " is-unbound"}`}
+            >
               <StatusBadge
                 status={bindingStatus.usable ? "configured" : "unbound"}
                 tone={bindingStatus.usable && bindingStatus.profileCount === null ? "info" : undefined}
@@ -1946,7 +1950,7 @@ export function WorkflowsPage() {
             actions={[
               {
                 key: "profile-groups",
-                label: "Profile 组",
+                label: "指纹窗口组",
                 icon: <Link2 size={14} />,
                 onClick: () => handleOpenProfileGroupModal(item),
               },
@@ -1988,7 +1992,7 @@ export function WorkflowsPage() {
       <Alert
         type={selectedSession ? "success" : "info"}
         showIcon
-        message={selectedSession ? "测试 Profile 已就绪" : "先打开一个测试 Profile"}
+        message={selectedSession ? "测试指纹窗口已就绪" : "先打开一个测试指纹窗口"}
         description={
           selectedSession
             ? selectedProfile?.display_name ?? selectedProfileId
@@ -2031,7 +2035,7 @@ export function WorkflowsPage() {
         />
       </div>
       <div className="workflow-field">
-        <Typography.Text type="secondary">测试窗口 / Profile</Typography.Text>
+        <Typography.Text type="secondary">测试指纹窗口</Typography.Text>
         <Select
           showSearch
           optionFilterProp="label"
@@ -2039,25 +2043,25 @@ export function WorkflowsPage() {
           value={selectedProfileId ?? undefined}
           options={profileOptions}
           onChange={(value) => setSelectedProfileId(value)}
-          placeholder="选择测试 Profile"
+          placeholder="选择测试指纹窗口"
         />
       </div>
       <Space direction="vertical" size={8} style={{ width: "100%" }}>
         <Button block loading={sessionActionLoading} onClick={() => void handleSyncProfiles()}>
-          刷新 Profiles
+          刷新指纹窗口
         </Button>
         <Button block type="primary" loading={sessionActionLoading} onClick={() => void handleOpenTestProfile()}>
-          打开测试 Profile
+          打开测试指纹窗口
         </Button>
         <Button block danger loading={sessionActionLoading} disabled={!selectedSession} onClick={() => void handleCloseTestProfile()}>
-          关闭测试 Profile
+          关闭测试指纹窗口
         </Button>
       </Space>
       <Space wrap>
         <Tag>
           {selectedGroup ? selectedGroup.display_name : "全部分组"}
         </Tag>
-        <Tag>Profiles {filteredProfiles.length}</Tag>
+        <Tag>指纹窗口 {filteredProfiles.length}</Tag>
         <Tag>会话 {(openedSessions.data ?? []).length}</Tag>
       </Space>
     </Space>
@@ -2309,7 +2313,7 @@ export function WorkflowsPage() {
                     canvasActions={
                       <Popconfirm
                         title="全流程测试？"
-                        description="会在当前打开的测试 Profile 中按顺序真实执行全部节点。"
+                        description="会在当前打开的测试指纹窗口中按顺序真实执行全部节点。"
                         okText="开始测试"
                         cancelText="取消"
                         onConfirm={() => void handleDryRunWorkflow()}
@@ -2561,7 +2565,7 @@ export function WorkflowsPage() {
       </Modal>
 
       <Modal
-        title="关联运行 Profile 组"
+        title="关联运行指纹窗口组"
         open={Boolean(profileGroupModalWorkflow)}
         onCancel={() => {
           if (profileGroupSaving) {
@@ -2579,7 +2583,7 @@ export function WorkflowsPage() {
           <Alert
             type={profileGroupDraftIds.length ? "info" : "warning"}
             showIcon
-            message={profileGroupDraftIds.length ? "这些 Profile 组会作为批次/定时的运行池" : "未关联 Profile 组时，流程无法启动批次或定时"}
+            message={profileGroupDraftIds.length ? "这些指纹窗口组会作为批次/定时的运行池" : "未绑定指纹窗口组时，流程无法启动批次或定时"}
             description={
               profileGroupModalWorkflow
                 ? `流程：${profileGroupModalWorkflow.name}；Provider：${profileGroupModalWorkflow.target_provider_type}`
@@ -2595,7 +2599,7 @@ export function WorkflowsPage() {
             />
           ) : null}
           <div className="workflow-field">
-            <Typography.Text type="secondary">只展示 Provider 管理范围内的 Profile 组</Typography.Text>
+            <Typography.Text type="secondary">只展示 Provider 管理范围内的指纹窗口组</Typography.Text>
             <Select
               mode="multiple"
               allowClear
@@ -2615,7 +2619,7 @@ export function WorkflowsPage() {
               已选 {profileGroupDraftIds.length} 组
             </Tag>
             <Tag color={modalProfileCount > 0 ? "green" : "red"}>
-              命中 {modalProfileCount} Profiles
+              命中 {modalProfileCount} 个指纹窗口
             </Tag>
             <Button
               size="small"
@@ -2745,7 +2749,11 @@ export function WorkflowsPage() {
         }
         initialValues={composerInitialValues}
         initialLocatorPreview={composerInitialLocatorPreview}
-        testSessionLabel={selectedProfile ? `${selectedProfile.display_name} (#${selectedProfile.external_profile_id})` : null}
+        testSessionLabel={
+          selectedProfile
+            ? `${selectedProfile.display_name}${selectedProfile.remark ? ` · ${selectedProfile.remark}` : ""} (#${selectedProfile.external_profile_id})`
+            : null
+        }
         previewAvailable={Boolean(selectedSession)}
         onCancel={() => {
           setSelectedCard(null);

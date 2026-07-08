@@ -55,6 +55,10 @@ async def _run_lightweight_migrations(conn) -> None:
         await conn.execute(
             text("ALTER TABLE batch_rows ADD COLUMN mapped_profile_id VARCHAR(128)")
         )
+    result = await conn.execute(text("PRAGMA table_info(profiles)"))
+    profile_columns = {row[1] for row in result.fetchall()}
+    if "remark" not in profile_columns:
+        await conn.execute(text("ALTER TABLE profiles ADD COLUMN remark TEXT"))
 
 
 async def get_session() -> AsyncIterator[AsyncSession]:

@@ -52,6 +52,13 @@ const WEEKDAY_LABEL_BY_VALUE = Object.fromEntries(
   WEEKDAY_OPTIONS.map((item) => [item.value, item.label]),
 ) as Record<string, string>;
 
+const SCHEDULE_CREATE_STEPS = [
+  { title: "基础信息", description: "选择流程、浏览器和槽位" },
+  { title: "执行时间", description: "设置一次性、每天或每周" },
+  { title: "Excel 数据", description: "导入 profile_id 参数表" },
+  { title: "确认创建", description: "复核后生成计划" },
+];
+
 function defaultScheduleTime() {
   return dayjs().hour(9).minute(30).second(0).millisecond(0);
 }
@@ -186,7 +193,7 @@ function countProfilesInGroups(profiles: ProfileRecord[] | null | undefined, gro
 
 function groupSummaryLabel(groups: ProviderGroupRecord[] | null | undefined, groupIds: string[]) {
   if (!groupIds.length) {
-    return "未关联 Profile 组";
+    return "未绑定指纹窗口组";
   }
   const nameById = new Map((groups ?? []).map((group) => [String(group.external_group_id), group.display_name]));
   return groupIds
@@ -204,7 +211,7 @@ function mappingErrorMessage(result: InputProfileMappingValidation) {
     parts.push(`重复: ${result.duplicate_profile_ids.slice(0, 5).join(", ")}`);
   }
   if (result.out_of_scope_profile_ids.length) {
-    parts.push(`不在流程 Profile 组内: ${result.out_of_scope_profile_ids.slice(0, 5).join(", ")}`);
+    parts.push(`不在流程指纹窗口组内: ${result.out_of_scope_profile_ids.slice(0, 5).join(", ")}`);
   }
   if (result.missing_profile_ids.length) {
     parts.push(`缺少: ${result.missing_profile_ids.slice(0, 5).join(", ")}`);
@@ -220,10 +227,10 @@ export function SchedulesPage() {
   const schedules = usePolling(schedulesFetcher, { intervalMs: 8000, cacheKey: "schedules:list" });
   const [form] = Form.useForm();
   const [editForm] = Form.useForm();
-  const scheduleType = Form.useWatch("schedule_type", form) ?? "daily";
+  const scheduleType = Form.useWatch("schedule_type", { form, preserve: true }) ?? "daily";
   const editScheduleType = Form.useWatch("schedule_type", editForm) ?? "daily";
-  const selectedWorkflowId = Form.useWatch("workflow_id", form);
-  const selectedProviderType = Form.useWatch("provider_type", form);
+  const selectedWorkflowId = Form.useWatch("workflow_id", { form, preserve: true });
+  const selectedProviderType = Form.useWatch("provider_type", { form, preserve: true });
   const [inputRows, setInputRows] = useState<ScheduleInputRow[]>([]);
   const [importingInput, setImportingInput] = useState(false);
   const [inputFileName, setInputFileName] = useState<string | null>(null);
@@ -232,6 +239,12 @@ export function SchedulesPage() {
   const [mappingValidation, setMappingValidation] = useState<InputProfileMappingValidation | null>(null);
   const [editingSchedule, setEditingSchedule] = useState<ScheduleRecord | null>(null);
   const [scheduleActionLoadingId, setScheduleActionLoadingId] = useState<string | null>(null);
+  const [createStep, setCreateStep] = useState(0);
+  const watchedScheduleTime = Form.useWatch("schedule_time", { form, preserve: true }) as Dayjs | undefined;
+  const watchedOnceDate = Form.useWatch("once_date", { form, preserve: true }) as Dayjs | undefined;
+  const watchedWeeklyDays = Form.useWatch("weekly_days", { form, preserve: true }) as string[] | undefined;
+  const watchedName = Form.useWatch("name", { form, preserve: true }) as string | undefined;
+  const watchedMaxConcurrency = Form.useWatch("max_concurrency", { form, preserve: true }) as number | undefined;
 
   const providerOptions = useMemo(
     () => (providers.data ?? []).map((item) => ({ value: item.provider_type, label: item.display_name })),
@@ -395,9 +408,87 @@ export function SchedulesPage() {
     return time.format("HH:mm");
   };
 
+  const schedulePreviewText = useMemo(() => {
+    if (scheduleType === "once") {
+      const dateText = watchedOnceDate?.isValid() ? watchedOnceDate.format("YYYY-MM-DD") : "未选日期";
+      const timeText = watchedScheduleTime?.isValid() ? watchedScheduleTime.format("HH:mm") : "未选时间";
+      return `${dateText} ${timeText}`;
+    }
+    if (scheduleType === "weekly") {
+      const days = (watchedWeeklyDays?.length ? watchedWeeklyDays : ["mon"])
+        .map((day) => WEEKDAY_LABEL_BY_VALUE[day] ?? day)
+        .join("、");
+      return `每周 ${days} ${watchedScheduleTime?.isValid() ? watchedScheduleTime.format("HH:mm") : "未选时间"}`;
+    }
+    return `每天 ${watchedScheduleTime?.isValid() ? watchedScheduleTime.format("HH:mm") : "未选时间"}`;
+  }, [scheduleType, watchedOnceDate, watchedScheduleTime, watchedWeeklyDays]);
+
+  const validateCreateStep = async (step = createStep) => {
+    if (step === 0) {
+      await form.validateFields(["name", "provider_type", "workflow_id", "max_concurrency"]);
+      if (!selectedWorkflow) {
+        throw new Error("请先选择流程");
+      }
+      if (!selectedWorkflowGroupIds.length) {
+        throw new Error("当前流程未绑定指纹窗口组，无法创建定时任务。请先到流程列表里点击“关联指纹窗口组”。");
+      }
+      if (providerProfiles.loading || providerGroups.loading) {
+        message.info("正在读取流程绑定的指纹窗口组，请稍等几秒后再继续。");
+        return false;
+      }
+      if (selectedWorkflowProfileCount <= 0) {
+        throw new Error("当前流程绑定的指纹窗口组没有命中可管理指纹窗口，请检查 Provider 管理范围。");
+      }
+    }
+    if (step === 1) {
+      const fields = ["schedule_type", "schedule_time"];
+      if (scheduleType === "once") {
+        fields.push("once_date");
+      }
+      if (scheduleType === "weekly") {
+        fields.push("weekly_days");
+      }
+      await form.validateFields(fields);
+    }
+    if (step === 2) {
+      if (!selectedInputFile || !mappingValidation?.valid) {
+        throw new Error("请先导入并校验一个 Excel 表格");
+      }
+      if (!inputRows.length) {
+        throw new Error("Excel 没有可执行数据行");
+      }
+    }
+    return true;
+  };
+
+  const goNextCreateStep = async () => {
+    try {
+      const canContinue = await validateCreateStep(createStep);
+      if (canContinue) {
+        setCreateStep((step) => Math.min(step + 1, SCHEDULE_CREATE_STEPS.length - 1));
+      }
+    } catch (cause) {
+      if (cause instanceof Error) {
+        message.error(cause.message);
+      }
+    }
+  };
+
+  const goPrevCreateStep = () => {
+    setCreateStep((step) => Math.max(step - 1, 0));
+  };
+
   const handleCreate = async () => {
     try {
-      const values = await form.validateFields();
+      const requiredFields = ["name", "provider_type", "workflow_id", "schedule_type", "schedule_time", "max_concurrency"];
+      const currentScheduleType = form.getFieldValue("schedule_type");
+      if (currentScheduleType === "once") {
+        requiredFields.push("once_date");
+      }
+      if (currentScheduleType === "weekly") {
+        requiredFields.push("weekly_days");
+      }
+      const values = await form.validateFields(requiredFields);
       const inlineRows = inputRows.map(rowToPayload).filter((row) => Object.keys(row).length > 0);
       if (!selectedInputFile || !mappingValidation?.valid) {
         throw new Error("请先导入并校验一个 Excel 表格");
@@ -409,14 +500,14 @@ export function SchedulesPage() {
         throw new Error("请先选择流程");
       }
       if (!selectedWorkflowGroupIds.length) {
-        throw new Error("当前流程未关联 Profile 组，无法创建定时任务。请先到流程列表里点击“关联 Profile 组”。");
+        throw new Error("当前流程未绑定指纹窗口组，无法创建定时任务。请先到流程列表里点击“关联指纹窗口组”。");
       }
       if (providerProfiles.loading || providerGroups.loading) {
-        message.info("正在读取流程绑定的 Profile 组，请稍等几秒后再创建计划。");
+        message.info("正在读取流程绑定的指纹窗口组，请稍等几秒后再创建计划。");
         return;
       }
       if (selectedWorkflowProfileCount <= 0) {
-        throw new Error("当前流程绑定的 Profile 组没有命中可管理 Profile，请检查 Provider 管理范围。");
+        throw new Error("当前流程绑定的指纹窗口组没有命中可管理指纹窗口，请检查 Provider 管理范围。");
       }
       const scheduleExpr = buildScheduleExpr(values);
       Modal.confirm({
@@ -427,8 +518,8 @@ export function SchedulesPage() {
           <Space direction="vertical" size={8}>
             <Typography.Text>流程：{selectedWorkflow.name}</Typography.Text>
             <Typography.Text>指纹浏览器：{selectedWorkflowProviderLabel}</Typography.Text>
-            <Typography.Text>Profile 组：{selectedWorkflowGroupSummary}</Typography.Text>
-            <Typography.Text>可运行 Profile：{selectedWorkflowProfileCount} 个</Typography.Text>
+            <Typography.Text>指纹窗口组：{selectedWorkflowGroupSummary}</Typography.Text>
+            <Typography.Text>可运行指纹窗口：{selectedWorkflowProfileCount} 个</Typography.Text>
             <Typography.Text>并发槽位：{values.max_concurrency}</Typography.Text>
             <Typography.Text>表格数据：{inlineRows.length} 行</Typography.Text>
           </Space>
@@ -454,6 +545,7 @@ export function SchedulesPage() {
             message.success("定时任务已创建");
             form.resetFields();
             resetInputRows();
+            setCreateStep(0);
             setScheduleReloadKey((value) => value + 1);
           } catch (cause) {
             if (cause instanceof Error) {
@@ -560,8 +652,8 @@ export function SchedulesPage() {
   }
 
   return (
-    <div className="app-page schedules-page">
-      <SectionCard title="轻量本机定时" subtitle="默认北京时间；选择流程、设置节奏、填写表格数据后即可生成计划。">
+    <div className="app-page schedules-page task-subpage">
+      <SectionCard title="定时任务" subtitle="默认北京时间；选择流程、设置节奏、导入 Excel 后即可生成计划。">
         <Form
           form={form}
           layout="vertical"
@@ -573,110 +665,186 @@ export function SchedulesPage() {
             max_concurrency: 1,
           }}
         >
-          <div className="schedule-designer">
-            <div className="schedule-panel">
-              <div className="schedule-panel-heading">
-                <div>
-                  <Typography.Text className="section-eyebrow">基础信息</Typography.Text>
-                  <Typography.Title level={5}>计划要执行什么</Typography.Title>
-                </div>
-              </div>
-              <div className="schedule-form-grid">
-                <Form.Item name="name" label="计划名称" rules={[{ required: true, message: "请输入计划名称" }]}>
-                  <Input placeholder="早班巡检" />
-                </Form.Item>
-                <Form.Item name="provider_type" label="浏览器 Provider" rules={[{ required: true }]}>
-                  <Select options={providerOptions} />
-                </Form.Item>
-                <Form.Item name="workflow_id" label="流程" rules={[{ required: true, message: "请选择流程" }]}>
-                  <Select options={workflowOptions} />
-                </Form.Item>
-                <Form.Item name="max_concurrency" label="并发槽位">
-                  <InputNumber min={1} max={10} style={{ width: "100%" }} />
-                </Form.Item>
-              </div>
-            </div>
+          <div className="schedule-step-workbench">
+            <aside className="schedule-step-rail">
+              {SCHEDULE_CREATE_STEPS.map((step, index) => (
+                <button
+                  key={step.title}
+                  type="button"
+                  className={`schedule-step-item${index === createStep ? " is-active" : ""}${index < createStep ? " is-done" : ""}`}
+                  onClick={() => {
+                    if (index <= createStep) {
+                      setCreateStep(index);
+                    }
+                  }}
+                >
+                  <span>{index + 1}</span>
+                  <div>
+                    <strong>{step.title}</strong>
+                    <small>{step.description}</small>
+                  </div>
+                </button>
+              ))}
+            </aside>
 
-            <div className="schedule-panel">
-              <div className="schedule-panel-heading">
-                <div>
-                  <Typography.Text className="section-eyebrow">执行时间</Typography.Text>
-                  <Typography.Title level={5}>什么时候自动运行</Typography.Title>
-                </div>
-              </div>
-              <div className="schedule-type-switch">
-                <Form.Item name="schedule_type" label="类型">
-                  <Radio.Group
-                    buttonStyle="solid"
-                    options={[
-                      { value: "once", label: "一次性" },
-                      { value: "daily", label: "每天" },
-                      { value: "weekly", label: "每周" },
-                    ]}
-                    optionType="button"
-                  />
-                </Form.Item>
-              </div>
-              <div className="schedule-type-row">
-                {scheduleType === "once" ? (
-                  <Form.Item name="once_date" label="执行日期" rules={[{ required: true }]}>
-                    <DatePicker style={{ width: "100%" }} />
-                  </Form.Item>
+            <div className="schedule-step-panel">
+              <div className="schedule-step-panel__body">
+                {createStep === 0 ? (
+                  <div className="schedule-step-content">
+                    <div className="schedule-step-title">
+                      <Typography.Text className="section-eyebrow">基础信息</Typography.Text>
+                      <Typography.Title level={5}>先确定计划要执行什么</Typography.Title>
+                      <Typography.Paragraph>选择流程后，系统会读取该流程绑定的指纹窗口组，并作为后续运行池。</Typography.Paragraph>
+                    </div>
+                    <div className="schedule-form-grid">
+                      <Form.Item name="name" label="计划名称" rules={[{ required: true, message: "请输入计划名称" }]}>
+                        <Input placeholder="例如：早班巡检" />
+                      </Form.Item>
+                      <Form.Item name="provider_type" label="浏览器 Provider" rules={[{ required: true }]}>
+                        <Select options={providerOptions} />
+                      </Form.Item>
+                      <Form.Item name="workflow_id" label="流程" rules={[{ required: true, message: "请选择流程" }]}>
+                        <Select options={workflowOptions} />
+                      </Form.Item>
+                      <Form.Item name="max_concurrency" label="并发槽位">
+                        <InputNumber min={1} max={10} style={{ width: "100%" }} />
+                      </Form.Item>
+                    </div>
+                    <div className={`schedule-profile-card${selectedWorkflowGroupIds.length ? " is-ready" : " is-warning"}`}>
+                      <Typography.Text className="section-eyebrow">指纹窗口组</Typography.Text>
+                      <Typography.Title level={5}>{selectedWorkflowGroupSummary}</Typography.Title>
+                      <Typography.Paragraph>
+                        {selectedWorkflowGroupIds.length
+                          ? `${selectedWorkflowProviderLabel} 下预计命中 ${selectedWorkflowProfileCount} 个可管理指纹窗口。`
+                          : "当前流程还没有绑定指纹窗口组，无法创建定时任务。"}
+                      </Typography.Paragraph>
+                    </div>
+                  </div>
                 ) : null}
-                <Form.Item name="schedule_time" label="执行时间" rules={[{ required: true }]}>
-                  <TimePicker format="HH:mm" minuteStep={5} style={{ width: "100%" }} />
-                </Form.Item>
-              </div>
-              {scheduleType === "weekly" ? (
-                <Form.Item name="weekly_days" label="每周哪几天执行" rules={[{ required: true }]}>
-                  <Checkbox.Group className="schedule-weekday-grid" options={WEEKDAY_OPTIONS} />
-                </Form.Item>
-              ) : null}
-            </div>
 
-            <div className="schedule-panel">
-              <Space className="schedule-panel-heading" wrap>
-                <div>
-                  <Typography.Text className="section-eyebrow">输入 Excel 数据</Typography.Text>
-                  <Typography.Title level={5}>只能导入流程参数 Excel</Typography.Title>
-                </div>
-                <Space wrap>
-                  <Button size="small" icon={<Download size={14} />} disabled={!selectedWorkflowId} onClick={() => void handleDownloadTemplate()}>
-                    下载流程参数模板
-                  </Button>
-                  <Upload {...uploadProps}>
-                    <Button size="small" loading={importingInput} icon={<UploadCloud size={14} />}>
-                      导入 Excel
-                    </Button>
-                  </Upload>
-                </Space>
-              </Space>
-              <div className="schedule-input-summary">
+                {createStep === 1 ? (
+                  <div className="schedule-step-content">
+                    <div className="schedule-step-title">
+                      <Typography.Text className="section-eyebrow">执行时间</Typography.Text>
+                      <Typography.Title level={5}>设置自动运行节奏</Typography.Title>
+                      <Typography.Paragraph>默认使用北京时间，不展示额外时区参数，减少运营配置成本。</Typography.Paragraph>
+                    </div>
+                    <div className="schedule-type-switch">
+                      <Form.Item name="schedule_type" label="类型">
+                        <Radio.Group
+                          buttonStyle="solid"
+                          options={[
+                            { value: "once", label: "一次性" },
+                            { value: "daily", label: "每天" },
+                            { value: "weekly", label: "每周" },
+                          ]}
+                          optionType="button"
+                        />
+                      </Form.Item>
+                    </div>
+                    <div className="schedule-type-row">
+                      {scheduleType === "once" ? (
+                        <Form.Item name="once_date" label="执行日期" rules={[{ required: true }]}>
+                          <DatePicker style={{ width: "100%" }} />
+                        </Form.Item>
+                      ) : null}
+                      <Form.Item name="schedule_time" label="执行时间" rules={[{ required: true }]}>
+                        <TimePicker format="HH:mm" minuteStep={5} style={{ width: "100%" }} />
+                      </Form.Item>
+                    </div>
+                    {scheduleType === "weekly" ? (
+                      <Form.Item name="weekly_days" label="每周哪几天执行" rules={[{ required: true }]}>
+                        <Checkbox.Group className="schedule-weekday-grid" options={WEEKDAY_OPTIONS} />
+                      </Form.Item>
+                    ) : null}
+                    <div className="schedule-preview-card">
+                      <span>当前节奏</span>
+                      <strong>{schedulePreviewText}</strong>
+                    </div>
+                  </div>
+                ) : null}
+
+                {createStep === 2 ? (
+                  <div className="schedule-step-content">
+                    <div className="schedule-step-title schedule-step-title--with-actions">
+                      <div>
+                        <Typography.Text className="section-eyebrow">Excel 数据</Typography.Text>
+                        <Typography.Title level={5}>导入流程参数表</Typography.Title>
+                        <Typography.Paragraph>每一行必须包含 profile_id，一行对应一个指纹窗口，保存时会使用全部数据。</Typography.Paragraph>
+                      </div>
+                      <Space wrap>
+                        <Button size="small" icon={<Download size={14} />} disabled={!selectedWorkflowId} onClick={() => void handleDownloadTemplate()}>
+                          下载流程参数模板
+                        </Button>
+                        <Upload {...uploadProps}>
+                          <Button size="small" loading={importingInput} icon={<UploadCloud size={14} />}>
+                            导入 Excel
+                          </Button>
+                        </Upload>
+                      </Space>
+                    </div>
+                    <div className="schedule-input-summary schedule-input-summary--wizard">
+                      <Typography.Text type="secondary">
+                        {inputFileName
+                          ? `已导入：${inputFileName}`
+                          : "请先下载流程参数模板，补齐业务字段后导入 .xlsx / .xlsm 文件。"}
+                      </Typography.Text>
+                      <Tag color="gold">{inputRows.length} 行</Tag>
+                      <Tag color="cyan">{inputColumnKeys.length} 列</Tag>
+                      {mappingValidation ? (
+                        <Tag color={mappingValidation.valid ? "green" : "red"}>
+                          匹配 {mappingValidation.matched_count}/{mappingValidation.total_rows}
+                        </Tag>
+                      ) : null}
+                      {inputFileName ? (
+                        <Button size="small" danger type="text" icon={<Trash2 size={14} />} onClick={resetInputRows}>
+                          移除表格
+                        </Button>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
+
+                {createStep === 3 ? (
+                  <div className="schedule-step-content">
+                    <div className="schedule-step-title">
+                      <Typography.Text className="section-eyebrow">确认创建</Typography.Text>
+                      <Typography.Title level={5}>复核计划配置</Typography.Title>
+                      <Typography.Paragraph>点击创建后会保存为本机计划，到点生成真实批次并按槽位并发执行。</Typography.Paragraph>
+                    </div>
+                    <div className="schedule-confirm-grid">
+                      <div><span>计划名称</span><strong>{watchedName || "未填写"}</strong></div>
+                      <div><span>流程</span><strong>{selectedWorkflow?.name ?? "未选择"}</strong></div>
+                      <div><span>指纹浏览器</span><strong>{selectedWorkflowProviderLabel}</strong></div>
+                      <div><span>指纹窗口组</span><strong>{selectedWorkflowGroupSummary}</strong></div>
+                      <div><span>运行节奏</span><strong>{schedulePreviewText}</strong></div>
+                      <div><span>并发槽位</span><strong>{watchedMaxConcurrency ?? 1}</strong></div>
+                      <div><span>Excel 数据</span><strong>{inputRows.length} 行 / {inputColumnKeys.length} 列</strong></div>
+                      <div><span>可运行窗口</span><strong>{selectedWorkflowProfileCount} 个</strong></div>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="schedule-step-actions">
                 <Typography.Text type="secondary">
-                  {inputFileName
-                    ? `已导入：${inputFileName}，仅预览前 5 行，保存时会使用全部数据。`
-                    : "请先下载流程参数模板，补齐业务字段后导入 .xlsx / .xlsm 文件。"}
+                  {createStep + 1} / {SCHEDULE_CREATE_STEPS.length} · {SCHEDULE_CREATE_STEPS[createStep].description}
                 </Typography.Text>
-                <Tag color="gold">{inputRows.length} 行</Tag>
-                <Tag color="cyan">{inputColumnKeys.length} 列</Tag>
-                {mappingValidation ? (
-                  <Tag color={mappingValidation.valid ? "green" : "red"}>
-                    匹配 {mappingValidation.matched_count}/{mappingValidation.total_rows}
-                  </Tag>
-                ) : null}
-                {inputFileName ? (
-                  <Button size="small" danger type="text" icon={<Trash2 size={14} />} onClick={resetInputRows}>
-                    移除表格
+                <Space>
+                  <Button disabled={createStep === 0} onClick={goPrevCreateStep}>
+                    上一步
                   </Button>
-                ) : null}
+                  {createStep < SCHEDULE_CREATE_STEPS.length - 1 ? (
+                    <Button type="primary" onClick={() => void goNextCreateStep()}>
+                      下一步
+                    </Button>
+                  ) : (
+                    <Button type="primary" onClick={() => void handleCreate()}>
+                      创建计划
+                    </Button>
+                  )}
+                </Space>
               </div>
-            </div>
-
-            <div className="schedule-submit-bar">
-              <Typography.Text type="secondary">保存后会到点生成真实批次，并按槽位并发执行。</Typography.Text>
-              <Button type="primary" size="large" onClick={() => void handleCreate()}>
-                创建计划
-              </Button>
             </div>
           </div>
         </Form>
