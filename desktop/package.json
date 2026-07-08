@@ -9,14 +9,17 @@
     "build:runtime:mac": "cd ../runtime && ./.venv/bin/pyinstaller packaging/opcontroller-runtime.spec --noconfirm",
     "build:runtime:win": "cd ../runtime && .\\.venv\\Scripts\\python.exe -m PyInstaller packaging/opcontroller-runtime.spec --noconfirm",
     "build:mac": "npm run build && npm run build:runtime:mac && tauri build",
+    "build:mac:updater": "npm run build && npm run build:runtime:mac && tauri build -c src-tauri/tauri.updater.conf.json",
     "build:mac:internal": "npm run build:mac && bash ../scripts/package-mac-internal.sh",
     "build:win": "npm run build && npm run build:runtime:win && tauri build --bundles nsis,msi --verbose",
+    "build:win:updater": "npm run build && npm run build:runtime:win && tauri build -c src-tauri/tauri.updater.conf.json --bundles nsis,msi --verbose",
     "preview": "vite preview",
     "tauri:dev": "tauri dev"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
     "@tauri-apps/api": "^2.8.0",
+    "@tauri-apps/plugin-updater": "^2.10.1",
     "antd": "^5.27.0",
     "dayjs": "^1.11.13",
     "lucide-react": "^0.540.0",

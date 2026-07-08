@@ -315,6 +315,8 @@ export type TaskRunDetail = {
 
 export type SystemCheckResult = {
   app_name: string;
+  runtime_version: string;
+  desktop_version?: string | null;
   runtime_origin: string;
   paths: Record<string, string>;
   runtime_health: {

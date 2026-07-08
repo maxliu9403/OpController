@@ -20,9 +20,10 @@ class RuntimePathSummary(BaseModel):
 
 class SystemCheckResult(BaseModel):
     app_name: str
+    runtime_version: str
+    desktop_version: str | None = None
     runtime_origin: str
     paths: RuntimePathSummary
     runtime_health: HealthSummary
     providers: list[ProviderInfo] = Field(default_factory=list)
     diagnostics: dict[str, Any] = Field(default_factory=dict)
-

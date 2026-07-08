@@ -9,7 +9,9 @@
     "dev:desktop": "npm --workspace desktop run dev",
     "build:desktop": "npm --workspace desktop run build",
     "build:mac:internal": "npm --workspace desktop run build:mac && bash scripts/package-mac-internal.sh",
+    "build:mac:updater": "npm --workspace desktop run build:mac:updater",
     "build:win": "npm --workspace desktop run build:win",
+    "build:win:updater": "npm --workspace desktop run build:win:updater",
     "package:win": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-windows.ps1",
     "tauri:dev": "npm --workspace desktop run tauri:dev"
   }

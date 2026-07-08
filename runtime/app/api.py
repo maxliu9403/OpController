@@ -58,7 +58,7 @@ async def local_api_auth_middleware(request: Request, call_next: Callable):
 
 @router.get("/health")
 async def health() -> dict[str, str]:
-    return {"status": "ok"}
+    return {"status": "ok", "version": settings.runtime_version}
 
 
 @router.get("/system/check")
