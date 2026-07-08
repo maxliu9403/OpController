@@ -91,6 +91,15 @@ foreach ($installer in $installers) {
   Write-Host ("Found artifact: {0} ({1} MB)" -f $installer.FullName, $size) -ForegroundColor Green
   Write-SummaryLine "| ``$($installer.FullName)`` | $size MB |"
   Copy-Item $installer.FullName -Destination $OutputDir -Force
+
+  $signaturePath = "$($installer.FullName).sig"
+  if (Test-Path $signaturePath) {
+    $signature = Get-Item $signaturePath
+    $signatureSize = Format-SizeMb -Bytes $signature.Length
+    Write-Host ("Found updater signature: {0} ({1} MB)" -f $signature.FullName, $signatureSize) -ForegroundColor Green
+    Write-SummaryLine "| ``$($signature.FullName)`` | $signatureSize MB |"
+    Copy-Item $signature.FullName -Destination $OutputDir -Force
+  }
 }
 
 Write-Host "Copied Windows artifacts to: $OutputDir"
