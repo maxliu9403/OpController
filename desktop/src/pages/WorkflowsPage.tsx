@@ -1696,6 +1696,7 @@ export function WorkflowsPage() {
       locator: locatorPreview?.locator ?? null,
       row_payload: {
         keyword: "Bags",
+        search_keyword: "Bags|Shoes|Jeans",
         status: "enabled",
       },
     });
@@ -1719,7 +1720,7 @@ export function WorkflowsPage() {
         workflow_yaml: yamlValue,
         stop_on_failure: true,
         row_payload: {
-          search_keyword: "Bags",
+          search_keyword: "Bags|Shoes|Jeans",
           keyword: "Bags",
           status: "enabled",
         },

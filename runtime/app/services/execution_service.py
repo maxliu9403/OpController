@@ -1441,11 +1441,69 @@ class ExecutionService:
             **context.variables,
         }
         rendered = template_value
+        for key, inner in context.row_payload.items():
+            rendered = rendered.replace(
+                f"${{row.{key}}}",
+                self._resolve_row_variable("row", str(key), inner, context),
+            )
         for namespace, value in variables.items():
+            if namespace == "row":
+                continue
             if isinstance(value, dict):
                 for key, inner in value.items():
                     rendered = rendered.replace(f"${{{namespace}.{key}}}", str(inner))
         return Template(rendered).safe_substitute({})
+
+    @staticmethod
+    def _split_random_candidates(value: str) -> list[str]:
+        parts: list[str] = []
+        buffer: list[str] = []
+        index = 0
+        while index < len(value):
+            char = value[index]
+            if char == "\\" and index + 1 < len(value) and value[index + 1] == "|":
+                buffer.append("|")
+                index += 2
+                continue
+            if char == "|":
+                candidate = "".join(buffer).strip()
+                if candidate:
+                    parts.append(candidate)
+                buffer = []
+                index += 1
+                continue
+            buffer.append(char)
+            index += 1
+        candidate = "".join(buffer).strip()
+        if candidate:
+            parts.append(candidate)
+        return parts
+
+    @staticmethod
+    def _row_random_cache(context: ExecutionContext) -> dict[str, str]:
+        cache = context.variables.setdefault("row_random_choices", {})
+        if not isinstance(cache, dict):
+            cache = {}
+            context.variables["row_random_choices"] = cache
+        return cache
+
+    def _resolve_row_variable(
+        self,
+        namespace: str,
+        key: str,
+        raw_value: Any,
+        context: ExecutionContext,
+    ) -> str:
+        if not isinstance(raw_value, str):
+            return str(raw_value)
+        candidates = self._split_random_candidates(raw_value)
+        if len(candidates) <= 1:
+            return candidates[0] if candidates else ""
+        cache = self._row_random_cache(context)
+        cache_key = key if namespace == "row" else f"{namespace}.{key}"
+        if cache_key not in cache:
+            cache[cache_key] = random.choice(candidates)
+        return cache[cache_key]
 
     async def _resolve_locator(
         self,
@@ -1782,14 +1840,8 @@ class ExecutionService:
                     "skip_reason": "random_many locator matched no elements",
                 }
                 return
-            if count > settings.random_click_max_match_count:
-                raise ExecutionError(
-                    "random_click_too_broad",
-                    (
-                        f"随机点击命中 {count} 个元素，超过安全阈值 "
-                        f"{settings.random_click_max_match_count}。请缩小定位范围或增加列表行上下文"
-                    ),
-                )
+            broad_match_threshold = settings.random_click_max_match_count
+            broad_match_warning = broad_match_threshold > 0 and count > broad_match_threshold
             requested_count = min(max(step.random_click_count, 1), settings.random_click_max_count)
             click_count = min(requested_count, count)
             clicked_indices = self._random_indices(total=count, requested=click_count)
@@ -1811,6 +1863,8 @@ class ExecutionService:
                 "clicked_indices": clicked_indices[: len(click_results)],
                 "safe_max_count": settings.random_click_max_count,
                 "capped_by_safety": step.random_click_count > settings.random_click_max_count,
+                "broad_match_threshold": broad_match_threshold,
+                "broad_match_warning": broad_match_warning,
                 "click_hold_ms": [result.get("click_hold_ms") for result in click_results],
                 "click_results": click_results,
                 "locator_resolution": context.variables.get("_last_locator_resolution", {}),

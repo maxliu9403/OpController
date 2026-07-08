@@ -183,6 +183,57 @@ def make_workflow(step: WorkflowStep) -> WorkflowDefinition:
     )
 
 
+def make_context(row_payload: dict) -> ExecutionContext:
+    step = WorkflowStep(id="sleep-1", type="sleep", label="停留等待", value=1)
+    return ExecutionContext(
+        page=None,
+        browser=None,
+        workflow=make_workflow(step),
+        task_run_id="render-test",
+        row_payload=row_payload,
+        variables={"row": row_payload},
+    )
+
+
+def test_render_row_variable_random_candidates_are_cached_per_task(monkeypatch: pytest.MonkeyPatch) -> None:
+    service = ExecutionService(session_factory=None, monitor=None)
+    context = make_context({"search_keyword": "Nike|Adidas|Puma"})
+    choices: list[list[str]] = []
+
+    def choose(candidates: list[str]) -> str:
+        choices.append(candidates)
+        return candidates[1]
+
+    monkeypatch.setattr("app.services.execution_service.random.choice", choose)
+
+    assert service._render_value("${row.search_keyword}", context) == "Adidas"
+    assert service._render_value("搜索 ${row.search_keyword}", context) == "搜索 Adidas"
+    assert choices == [["Nike", "Adidas", "Puma"]]
+    assert context.variables["row_random_choices"] == {"search_keyword": "Adidas"}
+
+
+def test_render_row_variable_random_candidates_are_per_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    service = ExecutionService(session_factory=None, monitor=None)
+    selected = iter(["Nike", "Puma"])
+
+    monkeypatch.setattr("app.services.execution_service.random.choice", lambda _candidates: next(selected))
+
+    first = make_context({"search_keyword": "Nike|Adidas|Puma"})
+    second = make_context({"search_keyword": "Nike|Adidas|Puma"})
+
+    assert service._render_value("${row.search_keyword}", first) == "Nike"
+    assert service._render_value("${row.search_keyword}", second) == "Puma"
+
+
+def test_render_row_variable_keeps_single_values_and_escaped_pipes() -> None:
+    service = ExecutionService(session_factory=None, monitor=None)
+
+    assert service._split_random_candidates("Nike||Adidas") == ["Nike", "Adidas"]
+    assert service._split_random_candidates(r"Nike\|Air|Adidas") == ["Nike|Air", "Adidas"]
+    assert service._render_value("${row.brand}", make_context({"brand": r"Nike\|Air"})) == "Nike|Air"
+    assert service._render_value("${row.path}", make_context({"path": r"C:\tmp\file"})) == r"C:\tmp\file"
+
+
 @pytest.mark.asyncio
 async def test_click_random_many_allows_ambiguous_locator(monkeypatch: pytest.MonkeyPatch) -> None:
     clicked: list[int] = []
@@ -209,6 +260,39 @@ async def test_click_random_many_allows_ambiguous_locator(monkeypatch: pytest.Mo
     assert clicked == [2, 4, 0]
     assert context.variables["last_random_click"]["matched_count"] == 5
     assert context.variables["last_random_click"]["clicked_count"] == 3
+
+
+@pytest.mark.asyncio
+async def test_click_random_many_does_not_block_when_match_count_is_broad(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clicked: list[int] = []
+    locator = FakeLocator(count=96, clicked=clicked)
+    step = WorkflowStep(
+        id="preview",
+        type="click",
+        selector_key="target",
+        click_target_mode="random_many",
+        random_click_count=3,
+    )
+    workflow = make_workflow(step)
+    context = ExecutionContext(
+        page=FakePage(locator),
+        browser=None,
+        workflow=workflow,
+        task_run_id="preview",
+        row_payload={},
+    )
+    monkeypatch.setattr(settings, "random_click_max_match_count", 80)
+    monkeypatch.setattr("app.services.execution_service.random.sample", lambda population, k: [95, 20, 3])
+
+    await ExecutionService(session_factory=None, monitor=None)._handle_click(step, context)
+
+    assert clicked == [95, 20, 3]
+    assert context.variables["last_random_click"]["matched_count"] == 96
+    assert context.variables["last_random_click"]["clicked_count"] == 3
+    assert context.variables["last_random_click"]["broad_match_threshold"] == 80
+    assert context.variables["last_random_click"]["broad_match_warning"] is True
 
 
 @pytest.mark.asyncio

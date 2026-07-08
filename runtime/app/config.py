@@ -73,7 +73,8 @@ class Settings(BaseSettings):
     window_layout_default_height: int = 500
     window_layout_provider_deviation_px: int = 50
     random_click_max_count: int = 5
-    random_click_max_match_count: int = 80
+    # 0 means unlimited. Positive values are recorded as broad-match warnings only.
+    random_click_max_match_count: int = 0
     failure_screenshot_full_page: bool = False
     manual_screenshot_full_page: bool = False
     monitor_queue_maxsize: int = 1000

@@ -276,7 +276,7 @@ class BatchService:
         workbook = Workbook()
         sheet = workbook.active
         sheet.title = "Profile参数"
-        headers = ["profile_id", "profile_name", "group_name", "profile_remark", "keyword", "note"]
+        headers = ["profile_id", "profile_name", "group_name", "profile_remark", "keyword", "search_keyword", "note"]
         sheet.append(headers)
         header_fill = PatternFill("solid", fgColor="1F6F78")
         header_font = Font(color="FFFFFF", bold=True)
@@ -293,6 +293,7 @@ class BatchService:
                     profile.remark or "",
                     "",
                     "",
+                    "",
                 ]
             )
         sheet.freeze_panes = "A2"
@@ -307,8 +308,11 @@ class BatchService:
             ["一行一个指纹窗口", "每一行代表一个指纹浏览器窗口的执行参数，系统会按 profile_id 精确绑定窗口。"],
             ["必填列 profile_id", "不要删除 profile_id 列；它必须等于指纹浏览器中的指纹窗口 ID。"],
             ["可编辑列", "profile_name、group_name 和 profile_remark 用于识别窗口，通常不参与流程变量，可保留不改。"],
-            ["业务字段", "可以新增任意业务列，例如 keyword、price、shop_id、note。"],
+            ["业务字段", "可以新增任意业务列，例如 keyword、search_keyword、price、shop_id、note。"],
             ["流程变量", "流程节点中使用 ${row.keyword}、${row.price}、${row.shop_id} 读取同一行的字段值。"],
+            ["多候选随机值", "如果一个字段要随机选择，可以在单元格里用 | 分隔多个值，例如 search_keyword 填 Nike|Adidas|Puma。"],
+            ["随机变量用法", "流程节点仍填写 ${row.search_keyword}；每个任务会随机选择一个候选值，同一任务内多次使用保持一致。"],
+            ["普通竖线", "如果文本本身需要竖线字符，请写成 \\|，例如 Nike\\|Air|Adidas 会在 Nike|Air 和 Adidas 中随机。"],
             ["槽位说明", "槽位只控制同时打开的窗口数量；表格有多少个合法 profile_id，最终就会执行多少个指纹窗口。"],
             ["校验规则", "导入时会检查 profile_id 是否为空、重复、或不在当前流程绑定的指纹窗口组内。"],
         ]

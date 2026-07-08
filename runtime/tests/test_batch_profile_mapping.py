@@ -124,6 +124,14 @@ async def test_build_input_template_contains_all_workflow_profiles() -> None:
         workbook = load_workbook(filename=BytesIO(content))
         assert "使用说明" in workbook.sheetnames
         rows = list(workbook.active.iter_rows(values_only=True))
+        guide_text = "\n".join(
+            str(cell or "")
+            for row in workbook["使用说明"].iter_rows(values_only=True)
+            for cell in row
+        )
 
-        assert rows[0][:6] == ("profile_id", "profile_name", "group_name", "profile_remark", "keyword", "note")
+        assert rows[0][:7] == ("profile_id", "profile_name", "group_name", "profile_remark", "keyword", "search_keyword", "note")
         assert [row[0] for row in rows[1:]] == ["101", "102"]
+        assert "Nike|Adidas|Puma" in guide_text
+        assert "${row.search_keyword}" in guide_text
+        assert "\\|" in guide_text
