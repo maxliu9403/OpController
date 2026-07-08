@@ -13,18 +13,6 @@ on:
         required: false
         default: false
         type: boolean
-  push:
-    branches:
-      - main
-    paths:
-      - "desktop/**"
-      - "runtime/**"
-      - "shared/**"
-      - "package.json"
-      - "package-lock.json"
-      - "desktop/package.json"
-      - "desktop/src-tauri/**"
-      - ".github/workflows/windows-build.yml"
 
 permissions:
   contents: read
