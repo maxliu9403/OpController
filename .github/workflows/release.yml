@@ -24,6 +24,82 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  macos:
+    name: macOS updater assets
+    runs-on: macos-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: "npm"
+          cache-dependency-path: package-lock.json
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            desktop/src-tauri/target
+          key: release-macos-cargo-${{ hashFiles('desktop/src-tauri/Cargo.lock') }}
+          restore-keys: |
+            release-macos-cargo-
+
+      - name: Install JavaScript dependencies
+        run: npm ci
+
+      - name: Install Python runtime dependencies
+        working-directory: runtime
+        run: |
+          python3 -m venv .venv
+          ./.venv/bin/python -m pip install --upgrade pip setuptools wheel
+          ./.venv/bin/python -m pip install -e ".[dev]"
+          ./.venv/bin/python -m playwright install chromium
+
+      - name: Run runtime tests
+        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.run_tests) }}
+        working-directory: runtime
+        run: ./.venv/bin/python -m pytest
+
+      - name: Build macOS updater bundles
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm run build:mac:updater
+
+      - name: Collect macOS release assets
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets/macos
+          cp desktop/src-tauri/target/release/bundle/macos/OpController.app.tar.gz release-assets/macos/
+          cp desktop/src-tauri/target/release/bundle/macos/OpController.app.tar.gz.sig release-assets/macos/
+          cp desktop/src-tauri/target/release/bundle/dmg/OpController_*_aarch64.dmg release-assets/macos/
+          ls -lh release-assets/macos
+
+      - name: Upload macOS release assets
+        uses: actions/upload-artifact@v6
+        with:
+          name: release-macos-assets
+          if-no-files-found: error
+          path: release-assets/macos/*
+
   windows:
     name: Windows updater assets
     runs-on: windows-latest
@@ -105,7 +181,9 @@ jobs:
   publish:
     name: Publish GitHub release
     runs-on: ubuntu-latest
-    needs: windows
+    needs:
+      - macos
+      - windows
 
     steps:
       - name: Resolve release tag
@@ -122,34 +200,22 @@ jobs:
         uses: actions/download-artifact@v7
         with:
           name: release-windows-assets
-          path: release-assets
+          path: release-assets/windows
+
+      - name: Download macOS release assets
+        uses: actions/download-artifact@v7
+        with:
+          name: release-macos-assets
+          path: release-assets/macos
 
       - name: Generate latest.json
         shell: bash
         run: |
           set -euo pipefail
           tag="${{ steps.release.outputs.tag }}"
-          version="${tag#v}"
-          nsis="$(find release-assets -maxdepth 1 -type f -name '*.exe' | head -n 1)"
-          if [[ -z "$nsis" ]]; then
-            echo "No NSIS .exe artifact found under release-assets" >&2
-            find release-assets -maxdepth 1 -type f -print >&2
-            exit 1
-          fi
-          sig="${nsis}.sig"
-          if [[ ! -f "$sig" ]]; then
-            echo "No updater signature found next to $nsis" >&2
-            find release-assets -maxdepth 1 -type f -print >&2
-            exit 1
-          fi
-          asset_name="$(basename "$nsis")"
-          signature="$(tr -d '\r\n' < "$sig")"
           RELEASE_TAG="$tag" \
-          RELEASE_VERSION="$version" \
-          RELEASE_ASSET_NAME="$asset_name" \
-          RELEASE_SIGNATURE="$signature" \
           RELEASE_REPOSITORY="${{ github.repository }}" \
-          python -c 'import json, os; from datetime import datetime, timezone; tag=os.environ["RELEASE_TAG"]; version=os.environ["RELEASE_VERSION"]; asset_name=os.environ["RELEASE_ASSET_NAME"]; signature=os.environ["RELEASE_SIGNATURE"]; repository=os.environ["RELEASE_REPOSITORY"]; payload={"version": version, "notes": f"OpController {tag}", "pub_date": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"), "platforms": {"windows-x86_64-nsis": {"signature": signature, "url": f"https://github.com/{repository}/releases/download/{tag}/{asset_name}"}}}; open("release-assets/latest.json", "w", encoding="utf-8").write(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")'
+          python -c 'import json, os, pathlib; from datetime import datetime, timezone; tag=os.environ["RELEASE_TAG"]; version=tag[1:] if tag.startswith("v") else tag; repository=os.environ["RELEASE_REPOSITORY"]; root=pathlib.Path("release-assets"); win=next((root/"windows").glob("*.exe")); mac=root/"macos"/"OpController.app.tar.gz"; platforms={"windows-x86_64-nsis": {"signature": pathlib.Path(str(win)+".sig").read_text(encoding="utf-8").strip(), "url": f"https://github.com/{repository}/releases/download/{tag}/{win.name}"}, "darwin-aarch64": {"signature": pathlib.Path(str(mac)+".sig").read_text(encoding="utf-8").strip(), "url": f"https://github.com/{repository}/releases/download/{tag}/{mac.name}"}}; payload={"version": version, "notes": f"OpController {tag}", "pub_date": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"), "platforms": platforms}; (root/"latest.json").write_text(json.dumps(payload, indent=2, ensure_ascii=False)+"\n", encoding="utf-8")'
           cat release-assets/latest.json
 
       - name: Create or update release
@@ -162,4 +228,6 @@ jobs:
           prerelease: false
           make_latest: true
           files: |
-            release-assets/*
+            release-assets/latest.json
+            release-assets/macos/*
+            release-assets/windows/*
