@@ -1,11 +1,12 @@
-import { Segmented, Space, Typography } from "antd";
+import { Button, Modal, Segmented, Select, Space, Typography, message } from "antd";
 import dayjs from "dayjs";
-import { CalendarClock, Clock3, PlayCircle, TimerReset } from "lucide-react";
-import { lazy, Suspense, useMemo } from "react";
+import { CalendarClock, Clock3, Download, PlayCircle, TimerReset } from "lucide-react";
+import { lazy, Suspense, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import { usePolling } from "../hooks/usePolling";
-import type { BatchSummary } from "../types";
+import type { BatchSummary, WorkflowRecord } from "../types";
+import { downloadBlob, safeFileName } from "../utils/files";
 
 type TaskTab = "instant" | "scheduled";
 
@@ -30,6 +31,10 @@ export function TaskManagementPage() {
   const activeTab = normalizeTab(searchParams.get("tab"));
   const batches = usePolling(api.listBatches, { intervalMs: 7000, cacheKey: "batches:list" });
   const schedules = usePolling(api.listSchedules, { intervalMs: 12000, cacheKey: "schedules:list" });
+  const workflows = usePolling(api.listWorkflows, { intervalMs: 12000, cacheKey: "workflows:list:all" });
+  const [templateModalOpen, setTemplateModalOpen] = useState(false);
+  const [templateWorkflowId, setTemplateWorkflowId] = useState<string | null>(null);
+  const [downloadingTemplate, setDownloadingTemplate] = useState(false);
 
   const runningBatches = useMemo(
     () => (batches.data ?? []).filter((batch) => ["ready", "running", "paused"].includes(batch.status)),
@@ -51,9 +56,44 @@ export function TaskManagementPage() {
       }).length,
     [batches.data],
   );
+  const workflowOptions = useMemo(
+    () =>
+      (workflows.data ?? []).map((workflow) => ({
+        value: workflow.id,
+        label: workflow.name,
+      })),
+    [workflows.data],
+  );
+  const templateWorkflow = useMemo(
+    () => (workflows.data ?? []).find((workflow: WorkflowRecord) => workflow.id === templateWorkflowId) ?? null,
+    [templateWorkflowId, workflows.data],
+  );
 
   const handleTabChange = (value: string | number) => {
     setSearchParams({ tab: String(value) }, { replace: true });
+  };
+
+  const openTemplateModal = () => {
+    setTemplateWorkflowId((current) => current ?? workflows.data?.[0]?.id ?? null);
+    setTemplateModalOpen(true);
+  };
+
+  const handleDownloadTemplate = async () => {
+    if (!templateWorkflowId || !templateWorkflow) {
+      message.warning("请先选择一个流程");
+      return;
+    }
+    setDownloadingTemplate(true);
+    try {
+      const blob = await api.downloadWorkflowInputTemplate(templateWorkflowId);
+      downloadBlob(`${safeFileName(templateWorkflow.name, "profile_input_template")}_流程参数模板.xlsx`, blob);
+      message.success("流程参数模板已导出");
+      setTemplateModalOpen(false);
+    } catch (cause) {
+      message.error(cause instanceof Error ? cause.message : "导出模板失败");
+    } finally {
+      setDownloadingTemplate(false);
+    }
   };
 
   return (
@@ -66,12 +106,17 @@ export function TaskManagementPage() {
             把一次性批量执行和周期计划放在同一个工作台里管理，启动前确认流程、指纹窗口组、Excel 参数和槽位。
           </Typography.Paragraph>
         </div>
-        <Segmented
-          className="task-management-tabs"
-          options={TAB_OPTIONS}
-          value={activeTab}
-          onChange={handleTabChange}
-        />
+        <div className="task-management-hero__actions">
+          <Button icon={<Download size={15} />} onClick={openTemplateModal}>
+            下载流程参数模板
+          </Button>
+          <Segmented
+            className="task-management-tabs"
+            options={TAB_OPTIONS}
+            value={activeTab}
+            onChange={handleTabChange}
+          />
+        </div>
       </section>
 
       <div className="task-management-stat-grid">
@@ -104,6 +149,36 @@ export function TaskManagementPage() {
           </Suspense>
         </Space>
       </div>
+
+      <Modal
+        title="下载流程参数模板"
+        open={templateModalOpen}
+        okText="下载模板"
+        cancelText="取消"
+        confirmLoading={downloadingTemplate}
+        okButtonProps={{ disabled: !templateWorkflowId || workflows.loading }}
+        onOk={() => void handleDownloadTemplate()}
+        onCancel={() => setTemplateModalOpen(false)}
+      >
+        <Space direction="vertical" size={12} style={{ width: "100%" }}>
+          <Typography.Paragraph type="secondary" style={{ margin: 0 }}>
+            即时任务和定时任务使用同一份 Excel 模板；选择流程后，系统会按该流程绑定的指纹窗口组生成 profile_id 参数表。
+          </Typography.Paragraph>
+          <Select
+            showSearch
+            placeholder="选择要下载模板的流程"
+            loading={workflows.loading}
+            options={workflowOptions}
+            value={templateWorkflowId ?? undefined}
+            onChange={setTemplateWorkflowId}
+            optionFilterProp="label"
+            style={{ width: "100%" }}
+          />
+          {!workflowOptions.length && !workflows.loading ? (
+            <Typography.Text type="secondary">暂无流程。请先在流程编排里创建流程，再下载参数模板。</Typography.Text>
+          ) : null}
+        </Space>
+      </Modal>
     </div>
   );
 }

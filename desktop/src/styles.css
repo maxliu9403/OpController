@@ -1663,6 +1663,30 @@ a {
   line-height: 1.55;
 }
 
+.task-management-hero__actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.task-management-hero__actions > .ant-btn {
+  height: 36px;
+  border-color: var(--line-soft);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface-1) 78%, transparent);
+  color: var(--text-main);
+  font-size: 13px;
+  font-weight: 500;
+  box-shadow: none;
+}
+
+.task-management-hero__actions > .ant-btn:hover {
+  border-color: color-mix(in srgb, var(--warm) 46%, var(--line-soft));
+  background: var(--surface-2);
+}
+
 .task-management-tabs.ant-segmented {
   flex: 0 0 auto;
   padding: 4px;
@@ -2305,8 +2329,13 @@ a {
   }
 
   .task-management-tabs.ant-segmented,
+  .task-management-hero__actions,
   .task-management-stat-grid {
     width: 100%;
+  }
+
+  .task-management-hero__actions {
+    justify-content: space-between;
   }
 
   .task-management-stat-grid {

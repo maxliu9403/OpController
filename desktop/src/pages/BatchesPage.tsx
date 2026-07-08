@@ -1,6 +1,6 @@
 import { Button, Form, InputNumber, Modal, Select, Space, Spin, Table, Typography, Upload, message } from "antd";
 import type { UploadProps } from "antd";
-import { Download, UploadCloud } from "lucide-react";
+import { UploadCloud } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
 import { SectionCard } from "../components/SectionCard";
@@ -8,7 +8,6 @@ import { StatusBadge } from "../components/StatusBadge";
 import { TableActionMenu } from "../components/TableActionMenu";
 import { usePolling } from "../hooks/usePolling";
 import type { BatchSummary, ProfileRecord, ProviderGroupRecord, WorkflowRecord } from "../types";
-import { downloadBlob, safeFileName } from "../utils/files";
 
 function profileGroupId(profile: ProfileRecord) {
   const raw = profile.group_summary?.id;
@@ -205,20 +204,6 @@ export function BatchesPage() {
     });
   };
 
-  const handleDownloadTemplate = async () => {
-    if (!selectedWorkflowId || !selectedWorkflow) {
-      message.warning("请先选择流程模板");
-      return;
-    }
-    try {
-      const blob = await api.downloadWorkflowInputTemplate(selectedWorkflowId);
-      downloadBlob(`${safeFileName(selectedWorkflow.name, "profile_input_template")}_流程参数模板.xlsx`, blob);
-      message.success("模板已导出");
-    } catch (cause) {
-      message.error(cause instanceof Error ? cause.message : "导出模板失败");
-    }
-  };
-
   const handleCancelBatch = (batch: BatchSummary) => {
     Modal.confirm({
       title: "确认取消这个批次？",
@@ -356,17 +341,8 @@ export function BatchesPage() {
                   </Button>
                 </Upload>
                 <Typography.Text type="secondary">
-                  {importedFileName || "Excel 必须包含 profile_id 列，可下载流程参数模板后填写。"}
+                  {importedFileName || "Excel 必须包含 profile_id 列；如需模板，请使用任务管理顶部的“下载流程参数模板”。"}
                 </Typography.Text>
-                <Button
-                  type="text"
-                  size="small"
-                  icon={<Download size={14} />}
-                  disabled={!selectedWorkflowId}
-                  onClick={() => void handleDownloadTemplate()}
-                >
-                  下载流程参数模板
-                </Button>
               </div>
             </div>
           </div>

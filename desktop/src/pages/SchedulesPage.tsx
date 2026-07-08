@@ -19,7 +19,7 @@ import {
 } from "antd";
 import type { UploadProps } from "antd";
 import dayjs, { type Dayjs } from "dayjs";
-import { Download, Pencil, Trash2, UploadCloud } from "lucide-react";
+import { Pencil, Trash2, UploadCloud } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
 import { SectionCard } from "../components/SectionCard";
@@ -28,7 +28,6 @@ import { TableActionMenu } from "../components/TableActionMenu";
 import { usePolling } from "../hooks/usePolling";
 import type { ProfileRecord, ProviderGroupRecord, ScheduleRecord, WorkflowRecord } from "../types";
 import type { InputProfileMappingValidation } from "../types";
-import { downloadBlob, safeFileName } from "../utils/files";
 
 type ScheduleInputRow = {
   id: string;
@@ -359,20 +358,6 @@ export function SchedulesPage() {
     },
     maxCount: 1,
     showUploadList: false,
-  };
-
-  const handleDownloadTemplate = async () => {
-    if (!selectedWorkflowId || !selectedWorkflow) {
-      message.warning("请先选择流程");
-      return;
-    }
-    try {
-      const blob = await api.downloadWorkflowInputTemplate(selectedWorkflowId);
-      downloadBlob(`${safeFileName(selectedWorkflow.name, "profile_input_template")}_流程参数模板.xlsx`, blob);
-      message.success("模板已导出");
-    } catch (cause) {
-      message.error(cause instanceof Error ? cause.message : "导出模板失败");
-    }
   };
 
   const handleReplaceScheduleFile = async (schedule: ScheduleRecord, file: File) => {
@@ -773,9 +758,6 @@ export function SchedulesPage() {
                         <Typography.Paragraph>每一行必须包含 profile_id，一行对应一个指纹窗口，保存时会使用全部数据。</Typography.Paragraph>
                       </div>
                       <Space wrap>
-                        <Button size="small" icon={<Download size={14} />} disabled={!selectedWorkflowId} onClick={() => void handleDownloadTemplate()}>
-                          下载流程参数模板
-                        </Button>
                         <Upload {...uploadProps}>
                           <Button size="small" loading={importingInput} icon={<UploadCloud size={14} />}>
                             导入 Excel
@@ -787,7 +769,7 @@ export function SchedulesPage() {
                       <Typography.Text type="secondary">
                         {inputFileName
                           ? `已导入：${inputFileName}`
-                          : "请先下载流程参数模板，补齐业务字段后导入 .xlsx / .xlsm 文件。"}
+                          : "请使用任务管理顶部的“下载流程参数模板”，补齐业务字段后导入 .xlsx / .xlsm 文件。"}
                       </Typography.Text>
                       <Tag color="gold">{inputRows.length} 行</Tag>
                       <Tag color="cyan">{inputColumnKeys.length} 列</Tag>
