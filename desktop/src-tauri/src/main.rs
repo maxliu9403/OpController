@@ -9,8 +9,10 @@ use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rand::RngCore;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, RunEvent};
+use tauri_plugin_updater::UpdaterExt;
+use url::Url;
 
 const DEFAULT_RUNTIME_HOST: &str = "127.0.0.1";
 const DEFAULT_RUNTIME_PORT: u16 = 18519;
@@ -32,6 +34,22 @@ struct RuntimeBootStatus {
     desktop_log_tail: String,
     stdout_log_tail: String,
     stderr_log_tail: String,
+}
+
+#[derive(Clone, Serialize)]
+struct UpdateStatus {
+    current_version: String,
+    update_available: bool,
+    version: Option<String>,
+    date: Option<String>,
+    body: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateConfig {
+    pubkey: String,
+    endpoints: Vec<Url>,
 }
 
 struct RuntimeLaunchPlan {
@@ -124,11 +142,59 @@ fn runtime_boot_status(state: tauri::State<'_, RuntimeSidecarState>) -> RuntimeB
     }
 }
 
+#[tauri::command]
+async fn updater_check(app: AppHandle) -> Result<UpdateStatus, String> {
+    let updater = build_runtime_updater(&app)?;
+    let current_version = app.package_info().version.to_string();
+    let update = updater
+        .check()
+        .await
+        .map_err(|error| format!("检查更新失败：{error}"))?;
+    if let Some(update) = update {
+        Ok(UpdateStatus {
+            current_version,
+            update_available: true,
+            version: Some(update.version),
+            date: update.date.map(|date| date.to_string()),
+            body: update.body,
+        })
+    } else {
+        Ok(UpdateStatus {
+            current_version,
+            update_available: false,
+            version: None,
+            date: None,
+            body: None,
+        })
+    }
+}
+
+#[tauri::command]
+async fn updater_install(app: AppHandle) -> Result<(), String> {
+    let updater = build_runtime_updater(&app)?;
+    let update = updater
+        .check()
+        .await
+        .map_err(|error| format!("检查更新失败：{error}"))?;
+    let Some(update) = update else {
+        return Ok(());
+    };
+
+    update
+        .download_and_install(|_, _| {}, || {})
+        .await
+        .map_err(|error| format!("安装更新失败：{error}"))?;
+
+    app.restart();
+}
+
 fn main() {
     let app = tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             runtime_config,
-            runtime_boot_status
+            runtime_boot_status,
+            updater_check,
+            updater_install
         ])
         .setup(|app| {
             let log_dir = resolve_log_dir(app.handle());
@@ -161,6 +227,7 @@ fn main() {
             app.manage(state);
             Ok(())
         })
+        .plugin(build_updater_plugin())
         .build(tauri::generate_context!())
         .expect("failed to build OpController desktop shell");
 
@@ -184,6 +251,7 @@ fn bootstrap_runtime(
         runtime_host,
         runtime_port,
         runtime_token,
+        &app.package_info().version.to_string(),
         Duration::from_millis(350),
     ) {
         append_log(
@@ -204,6 +272,7 @@ fn bootstrap_runtime(
                 runtime_host,
                 runtime_port,
                 runtime_token,
+                &app.package_info().version.to_string(),
                 Duration::from_millis(500),
             ) {
                 append_log(log_dir, "existing runtime became healthy, reusing process");
@@ -245,6 +314,7 @@ fn bootstrap_runtime(
         .env("OPCTRL_HOST", runtime_host)
         .env("OPCTRL_PORT", runtime_port.to_string())
         .env("OPCTRL_API_TOKEN", runtime_token)
+        .env("OPCTRL_DESKTOP_VERSION", app.package_info().version.to_string())
         .env("PYTHONUNBUFFERED", "1")
         .stdout(Stdio::from(stdout_log))
         .stderr(Stdio::from(stderr_log))
@@ -388,6 +458,7 @@ fn runtime_health_ok(
     runtime_host: &str,
     runtime_port: u16,
     runtime_token: &str,
+    desktop_version: &str,
     timeout: Duration,
 ) -> bool {
     let address: SocketAddr = format!("{runtime_host}:{runtime_port}")
@@ -408,7 +479,44 @@ fn runtime_health_ok(
     if stream.read_to_string(&mut response).is_err() {
         return false;
     }
-    response.starts_with("HTTP/1.1 200") && response.contains("\"status\":\"ok\"")
+    response.starts_with("HTTP/1.1 200")
+        && response.contains("\"status\":\"ok\"")
+        && response.contains(&format!("\"desktop_version\":\"{desktop_version}\""))
+}
+
+fn build_updater_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R, tauri_plugin_updater::Config> {
+    tauri_plugin_updater::Builder::new().build()
+}
+
+fn build_runtime_updater(app: &AppHandle) -> Result<tauri_plugin_updater::Updater, String> {
+    let config = read_update_config(app);
+    let builder = app.updater_builder();
+    let builder = if config.pubkey.trim().is_empty() {
+        builder
+    } else {
+        builder.pubkey(config.pubkey)
+    };
+    let builder = builder
+        .endpoints(config.endpoints)
+        .map_err(|error| format!("更新配置无效：{error}"))?;
+    builder
+        .build()
+        .map_err(|error| format!("初始化更新器失败：{error}"))
+}
+
+fn read_update_config(app: &AppHandle) -> UpdateConfig {
+    let path = app
+        .path()
+        .resource_dir()
+        .ok()
+        .map(|dir| dir.join("update-config.json"))
+        .filter(|path| path.exists())
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("update-config.json"));
+    let raw = fs::read_to_string(path).unwrap_or_else(|_| "{\"pubkey\":\"\",\"endpoints\":[]}".to_string());
+    serde_json::from_str(&raw).unwrap_or(UpdateConfig {
+        pubkey: String::new(),
+        endpoints: Vec::new(),
+    })
 }
 
 fn open_log_file(log_dir: &Path, file_name: &str) -> std::io::Result<File> {

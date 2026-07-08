@@ -23,6 +23,12 @@
       "csp": null
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "",
+      "endpoints": []
+    }
+  },
   "bundle": {
     "active": true,
     "targets": "all",
@@ -35,7 +41,8 @@
     ],
     "resources": {
       "../../runtime/dist/opcontroller-runtime": "runtime-dist/opcontroller-runtime",
-      "../../shared": "shared"
+      "../../shared": "shared",
+      "update-config.json": "update-config.json"
     },
     "windows": {
       "nsis": {

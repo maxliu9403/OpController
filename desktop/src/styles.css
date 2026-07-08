@@ -182,6 +182,39 @@ a {
   color: var(--warm);
 }
 
+.app-version-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--line-soft);
+}
+
+.app-version-label {
+  font-size: 12px;
+  color: var(--text-soft);
+}
+
+.app-update-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 1px solid color-mix(in srgb, var(--warm) 24%, transparent);
+  border-radius: 999px;
+  color: var(--warm);
+  background: color-mix(in srgb, var(--warm) 10%, transparent);
+  font-size: 12px;
+  line-height: 1;
+}
+
+.app-update-copy.ant-typography {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-soft);
+}
+
 .section-eyebrow {
   letter-spacing: 0.04em;
   font-size: 12px;

@@ -83,6 +83,14 @@ desktop/src-tauri/gen/
 desktop/src-tauri/target-debug/
 desktop/src-tauri/target-release/
 
+# Tauri updater signing secrets
+.tauri/
+*/.tauri/
+*.key
+*.key.pub
+*.minisign
+*.sig
+
 # Packaged desktop artifacts
 *.app/
 *.dmg

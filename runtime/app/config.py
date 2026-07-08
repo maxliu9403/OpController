@@ -1,15 +1,28 @@
 from __future__ import annotations
 
+import os
+from importlib.metadata import PackageNotFoundError, version as package_version
 from pathlib import Path
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def resolve_runtime_version() -> str:
+    if configured := os.getenv("OPCTRL_RUNTIME_VERSION"):
+        return configured
+    try:
+        return package_version("opcontroller-runtime")
+    except PackageNotFoundError:
+        return "0.1.0"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="OPCTRL_", extra="ignore")
 
     app_name: str = "OpController Runtime"
+    runtime_version: str = Field(default_factory=resolve_runtime_version)
+    desktop_version: str | None = None
     host: str = "127.0.0.1"
     port: int = 18519
     api_token: str | None = None

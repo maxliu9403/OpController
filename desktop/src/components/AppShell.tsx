@@ -1,19 +1,22 @@
-import { Button, Layout, Menu, Typography } from "antd";
+import { Button, Layout, Menu, Space, Typography, message } from "antd";
 import {
   Activity,
   CalendarClock,
   Command,
   LayoutDashboard,
+  LoaderCircle,
   Moon,
   RadioTower,
   ScanSearch,
+  Sparkles,
   Sun,
 } from "lucide-react";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Link, Outlet, useLocation } from "react-router-dom";
 import { api } from "../api/client";
 import { primePollingCache } from "../hooks/usePolling";
 import { useThemeMode } from "../themeMode";
+import { checkForUpdates, installUpdate, type UpdateStatus } from "../updater";
 
 const { Content, Sider } = Layout;
 
@@ -42,6 +45,10 @@ function AppLogo() {
 export function AppShell() {
   const location = useLocation();
   const { mode, setMode } = useThemeMode();
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
+  const [currentVersion, setCurrentVersion] = useState<string>("");
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [installingUpdate, setInstallingUpdate] = useState(false);
   const selectedKey =
     items.find((item) => item.key !== "/" && location.pathname.startsWith(item.key))?.key ??
     (location.pathname === "/" ? "/" : location.pathname);
@@ -70,6 +77,51 @@ export function AppShell() {
     };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    const run = async () => {
+      try {
+        const result = await checkForUpdates();
+        if (!cancelled) {
+          setCurrentVersion(result.current_version);
+          setUpdateStatus(result);
+        }
+      } catch {
+        // 自动检查失败不阻塞界面，保留手动重试入口。
+      }
+    };
+
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleCheckUpdate = async () => {
+    setCheckingUpdate(true);
+    try {
+      const result = await checkForUpdates();
+      setCurrentVersion(result.current_version);
+      setUpdateStatus(result);
+      message.success(result.update_available ? `发现新版本 ${result.version}` : "当前已是最新版本");
+    } catch (cause) {
+      message.error(cause instanceof Error ? cause.message : "检查更新失败");
+    } finally {
+      setCheckingUpdate(false);
+    }
+  };
+
+  const handleInstallUpdate = async () => {
+    setInstallingUpdate(true);
+    try {
+      await installUpdate();
+    } catch (cause) {
+      message.error(cause instanceof Error ? cause.message : "安装更新失败");
+      setInstallingUpdate(false);
+    }
+  };
+
   return (
     <Layout className="app-layout">
       <Sider width={280} className="app-sider">
@@ -92,6 +144,44 @@ export function AppShell() {
           <Typography.Paragraph>
             多浏览器编排、可视群控与批次复盘工作台。
           </Typography.Paragraph>
+          <div className="app-version-panel">
+            <Space align="center" size={8} wrap>
+              <Typography.Text className="app-version-label">
+                桌面端 {updateStatus?.current_version ?? (currentVersion || "未知版本")}
+              </Typography.Text>
+              {updateStatus?.update_available ? (
+                <Typography.Text className="app-update-pill">
+                  <Sparkles size={12} />
+                  新版本 {updateStatus.version}
+                </Typography.Text>
+              ) : null}
+            </Space>
+            <Typography.Paragraph className="app-update-copy">
+              {updateStatus?.update_available
+                ? "发现可安装的新版本，安装后会自动重启。"
+                : "支持在应用内检查新版并完成升级。"}
+            </Typography.Paragraph>
+            <Space size={8} wrap>
+              <Button
+                size="small"
+                onClick={() => void handleCheckUpdate()}
+                loading={checkingUpdate}
+                icon={checkingUpdate ? <LoaderCircle size={14} /> : <Sparkles size={14} />}
+              >
+                检查更新
+              </Button>
+              {updateStatus?.update_available ? (
+                <Button
+                  size="small"
+                  type="primary"
+                  onClick={() => void handleInstallUpdate()}
+                  loading={installingUpdate}
+                >
+                  安装并重启
+                </Button>
+              ) : null}
+            </Space>
+          </div>
         </div>
         <Menu theme={mode === "dark" ? "dark" : "light"} mode="inline" selectedKeys={[selectedKey]} items={items} />
       </Sider>

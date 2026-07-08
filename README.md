@@ -178,6 +178,12 @@ macOS 本机内部测试包，推荐给运营或测试同事使用：
 npm run build:mac:internal
 ```
 
+macOS 生成应用内更新所需产物：
+
+```bash
+npm run build:mac:updater
+```
+
 macOS Tauri 默认包，仅用于本机开发验证或作为正式签名公证前的原始产物：
 
 ```bash
@@ -188,6 +194,12 @@ Windows 安装包必须在 Windows 环境或 GitHub Actions 的 Windows runner �
 
 ```powershell
 npm run build:win
+```
+
+Windows 生成应用内更新所需产物：
+
+```powershell
+npm run build:win:updater
 ```
 
 ### 仅构建前端
@@ -621,3 +633,65 @@ V1 是本地单机产品，暂不包含：
 - 系统唤醒后的自动补跑。
 
 当前代码已经按 Provider、调度器、执行器和 runtime service 边界拆分，后续可以在这些边界后继续扩展。
+
+## 应用内更新
+
+桌面端现在支持：
+
+- 启动后自动检查新版本。
+- 在左侧边栏手动点击“检查更新”。
+- 发现新版本后下载并安装，完成后自动重启桌面端。
+
+### 接入步骤
+
+应用内更新基于 Tauri updater。更新元数据文件位于：
+
+```text
+desktop/src-tauri/update-config.json
+```
+
+首次接入时需要填入：
+
+```json
+{
+  "pubkey": "你的 minisign 公钥",
+  "endpoints": [
+    "https://你的发布地址/latest.json"
+  ]
+}
+```
+
+说明：
+
+- `pubkey` 用于校验下载到的更新包签名。
+- `endpoints` 指向返回 Tauri updater JSON 的地址，可以是 GitHub Releases 生成的静态 `latest.json`，也可以是公司内部静态文件服务。
+- 默认仓库内该文件是空配置，开发构建不会自动检查远程更新。
+
+### 生成更新产物
+
+日常开发构建仍使用普通命令：
+
+```bash
+npm run build:desktop
+```
+
+只有在发布新版本、需要生成 updater 产物时，才使用 updater 专用构建命令：
+
+```bash
+npm run build:mac:updater
+```
+
+```powershell
+npm run build:win:updater
+```
+
+这样做的原因是 updater 构建会额外生成签名和更新包；普通开发构建不必依赖完整的更新发布配置。
+
+### 运行时版本校验
+
+桌面壳在复用本地 runtime 进程前，会校验：
+
+- `/local/v1/health` 返回 `status=ok`
+- runtime 记录的 `desktop_version` 与当前桌面端版本一致
+
+如果版本不一致，桌面壳不会复用旧 sidecar，而是拉起新版 runtime，避免“桌面端已升级但后台仍是旧版本”的混跑问题。

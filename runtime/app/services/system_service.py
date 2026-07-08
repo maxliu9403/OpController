@@ -36,6 +36,8 @@ class SystemService:
         )
         return SystemCheckResult(
             app_name=settings.app_name,
+            runtime_version=settings.runtime_version,
+            desktop_version=settings.desktop_version,
             runtime_origin=f"http://{settings.host}:{settings.port}",
             paths=RuntimePathSummary(
                 base_dir=str(settings.base_dir),
@@ -49,7 +51,7 @@ class SystemService:
             runtime_health=HealthSummary(
                 healthy=True,
                 message="runtime ready",
-                details={"timezone": settings.timezone},
+                details={"timezone": settings.timezone, "desktop_version": settings.desktop_version},
             ),
             providers=providers,
             diagnostics={"python_runtime": "3.12+", "storage": "sqlite"},
