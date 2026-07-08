@@ -365,6 +365,26 @@ desktop/src-tauri/target/release/bundle/nsis/*.exe
 desktop/src-tauri/target/release/bundle/msi/*.msi
 ```
 
+Windows 日常分发优先使用 `nsis/*.exe` 安装包。该安装包已配置安装前钩子，会在升级安装时自动停止旧版 `OpController` 与 `opcontroller-runtime.exe`，并清理旧的 `runtime-dist` 资源目录，避免 Python runtime 内置 DLL 被占用导致安装失败。
+
+如果旧版本安装包在 Windows 上提示类似下面的错误：
+
+```text
+Error opening file for writing:
+C:\Users\<用户>\AppData\Local\OpController\runtime-dist\opcontroller-runtime\_internal\MSVCP140.dll
+```
+
+说明旧版 runtime 进程仍占用 DLL。可以先关闭 OpController，然后在 PowerShell 执行下面的临时清理命令，再重新运行新版安装包：
+
+```powershell
+taskkill /F /T /IM opcontroller-runtime.exe
+taskkill /F /T /IM opcontroller-desktop.exe
+taskkill /F /T /IM opcontroller.exe
+taskkill /F /T /IM OpController.exe
+taskkill /F /T /IM "OpController Desktop.exe"
+Remove-Item "$env:LOCALAPPDATA\OpController\runtime-dist" -Recurse -Force -ErrorAction SilentlyContinue
+```
+
 一键脚本还会把最终安装包汇总复制到：
 
 ```text

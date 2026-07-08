@@ -36,6 +36,11 @@
     "resources": {
       "../../runtime/dist/opcontroller-runtime": "runtime-dist/opcontroller-runtime",
       "../../shared": "shared"
+    },
+    "windows": {
+      "nsis": {
+        "installerHooks": "installer-hooks.nsh"
+      }
     }
   }
 }
