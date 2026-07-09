@@ -688,7 +688,7 @@ export function WorkflowsPage() {
         return {
           color: "blue",
           label: `已关联 ${groupIds.length} 组`,
-          detail: "切换 Provider 后可查看窗口数量",
+          detail: "切换指纹窗口来源后可查看窗口数量",
           profileCount: null,
           usable: true,
         };
@@ -698,7 +698,7 @@ export function WorkflowsPage() {
       if (outOfScope.length) {
         return {
           color: "red",
-          label: "Provider 未加白",
+          label: "指纹窗口来源未加白",
           detail: outOfScope.slice(0, 3).join("、"),
           profileCount: 0,
           usable: false,
@@ -748,7 +748,7 @@ export function WorkflowsPage() {
       })),
       ...unavailableSelected.map((id) => ({
         value: id,
-        label: `未在 Provider 管理范围内：${id}`,
+        label: `未在指纹窗口管理范围内：${id}`,
         disabled: true,
       })),
     ];
@@ -1232,7 +1232,7 @@ export function WorkflowsPage() {
       providerOptions.find((option) => option.value === providerType)?.label ?? providerType;
 
     Modal.confirm({
-      title: "切换流程 Provider？",
+      title: "切换流程指纹窗口来源？",
       okText: "确认切换",
       cancelText: "取消",
       content: (
@@ -1242,7 +1242,7 @@ export function WorkflowsPage() {
             {currentProviderLabel} → {nextProviderLabel}
           </Typography.Text>
           <Typography.Text type="secondary">
-            切换后会清空当前流程已关联的指纹窗口组，需要重新点击“指纹窗口组”选择新 Provider 下的运行分组。
+            切换后会清空当前流程已关联的指纹窗口组，需要重新点击“指纹窗口组”选择新指纹窗口来源下的运行分组。
           </Typography.Text>
         </Space>
       ),
@@ -1272,9 +1272,9 @@ export function WorkflowsPage() {
           setGroupReloadKey((value) => value + 1);
           setProfileReloadKey((value) => value + 1);
           setSessionReloadKey((value) => value + 1);
-          message.success("流程 Provider 已切换，请重新关联指纹窗口组。");
+          message.success("流程指纹窗口来源已切换，请重新关联指纹窗口组。");
         } catch (cause) {
-          message.error(cause instanceof Error ? cause.message : "切换 Provider 失败");
+          message.error(cause instanceof Error ? cause.message : "切换指纹窗口来源失败");
         } finally {
           setWorkflowActionLoadingId(null);
         }
@@ -1889,7 +1889,7 @@ export function WorkflowsPage() {
         ),
       },
       {
-        title: "Provider",
+        title: "指纹窗口",
         dataIndex: "target_provider_type",
         key: "provider",
         width: 170,
@@ -2004,7 +2004,7 @@ export function WorkflowsPage() {
         <Alert type="warning" showIcon message="分组读取失败" description={groups.error} />
       ) : null}
       <div className="workflow-field">
-        <Typography.Text type="secondary">Provider</Typography.Text>
+        <Typography.Text type="secondary">指纹窗口</Typography.Text>
         <Select
           style={{ width: "100%" }}
           value={selectedProviderType}
@@ -2208,7 +2208,7 @@ export function WorkflowsPage() {
                   style={{ width: 180 }}
                   value={workflowProviderFilter ?? undefined}
                   options={providerOptions}
-                  placeholder="Provider"
+                  placeholder="指纹窗口"
                   onChange={(value) => setWorkflowProviderFilter(value ?? null)}
                 />
                 <Input.Search
@@ -2542,7 +2542,7 @@ export function WorkflowsPage() {
                 />
               </div>
               <div className="workflow-field">
-                <Typography.Text type="secondary">Provider</Typography.Text>
+                <Typography.Text type="secondary">指纹窗口</Typography.Text>
                 <Select
                   style={{ width: "100%" }}
                   value={newWorkflowProviderType}
@@ -2587,7 +2587,7 @@ export function WorkflowsPage() {
             message={profileGroupDraftIds.length ? "这些指纹窗口组会作为批次/定时的运行池" : "未绑定指纹窗口组时，流程无法启动批次或定时"}
             description={
               profileGroupModalWorkflow
-                ? `流程：${profileGroupModalWorkflow.name}；Provider：${profileGroupModalWorkflow.target_provider_type}`
+                ? `流程：${profileGroupModalWorkflow.name}；指纹窗口：${profileGroupModalWorkflow.target_provider_type}`
                 : undefined
             }
           />
@@ -2595,12 +2595,12 @@ export function WorkflowsPage() {
             <Alert
               type="warning"
               showIcon
-              message="Provider 管理范围读取失败"
+              message="指纹窗口管理范围读取失败"
               description={profileGroupModalGroups.error ?? profileGroupModalScope.error}
             />
           ) : null}
           <div className="workflow-field">
-            <Typography.Text type="secondary">只展示 Provider 管理范围内的指纹窗口组</Typography.Text>
+            <Typography.Text type="secondary">只展示指纹窗口管理范围内的指纹窗口组</Typography.Text>
             <Select
               mode="multiple"
               allowClear

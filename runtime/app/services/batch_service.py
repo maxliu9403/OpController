@@ -221,7 +221,7 @@ class BatchService:
             invalid_rows.append({"row_index": 1, "reason": "missing_profile_id_column"})
         if not profiles:
             warnings.append(
-                "Provider 管理范围未命中任何 Profile"
+                "指纹窗口管理范围未命中任何 Profile"
                 if empty_reason == "provider_scope_empty"
                 else "流程没有命中可运行指纹窗口，请先绑定运行指纹窗口组"
             )
@@ -434,7 +434,7 @@ class BatchService:
         try:
             provider = self.registry.get(provider_type)
         except KeyError as exc:
-            raise ValueError(f"未知指纹浏览器 Provider：{provider_type}") from exc
+            raise ValueError(f"未知指纹窗口来源：{provider_type}") from exc
 
         try:
             health = await asyncio.wait_for(provider.health_check(), timeout=settings.provider_health_timeout_sec)
@@ -605,7 +605,7 @@ class BatchService:
             if not profiles:
                 batch.status = BatchStatus.FAILED
                 batch.result_summary_json = {
-                    "error": "Provider 管理范围未命中任何 Profile"
+                    "error": "指纹窗口管理范围未命中任何 Profile"
                     if empty_reason == "provider_scope_empty"
                     else "No cached profiles matched the batch profile policy"
                 }
@@ -1023,7 +1023,7 @@ class BatchService:
         if strict and not validation.valid:
             raise ValueError(self._validation_error_message(validation))
         if strict and empty_reason:
-            raise ValueError("Provider 管理范围或流程指纹窗口组未命中任何指纹窗口")
+            raise ValueError("指纹窗口管理范围或流程指纹窗口组未命中任何指纹窗口")
         batch.result_summary_json = {
             **(batch.result_summary_json or {}),
             "profile_mapping": validation.model_dump(mode="json"),

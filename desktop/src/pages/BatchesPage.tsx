@@ -125,7 +125,7 @@ export function BatchesPage() {
       const providerType = form.getFieldValue("provider_type");
       const workflowId = form.getFieldValue("workflow_id");
       if (!providerType) {
-        throw new Error("请先选择 Provider");
+        throw new Error("请先选择指纹窗口");
       }
       if (!workflowId) {
         throw new Error("请先选择流程模板");
@@ -170,7 +170,7 @@ export function BatchesPage() {
       return;
     }
     if (selectedWorkflowProfileCount <= 0) {
-      message.error("当前流程绑定的指纹窗口组没有命中可管理指纹窗口，请检查 Provider 管理范围。");
+      message.error("当前流程绑定的指纹窗口组没有命中可管理指纹窗口，请检查指纹窗口管理范围。");
       return;
     }
     Modal.confirm({
@@ -243,7 +243,7 @@ export function BatchesPage() {
       ]);
       const profileCount = countProfilesInGroups(profiles, groupIds);
       if (profileCount <= 0) {
-        throw new Error("当前流程绑定的指纹窗口组没有命中可管理指纹窗口，请检查 Provider 管理范围。");
+        throw new Error("当前流程绑定的指纹窗口组没有命中可管理指纹窗口，请检查指纹窗口管理范围。");
       }
       Modal.confirm({
         title: "确认重试这个失败批次？",
@@ -350,7 +350,7 @@ export function BatchesPage() {
 
         <div className="task-submit-bar">
           <div>
-            <Typography.Text strong>启动前系统会再次校验 Provider、指纹窗口组和 Excel 映射。</Typography.Text>
+            <Typography.Text strong>启动前系统会再次校验指纹窗口、指纹窗口组和 Excel 映射。</Typography.Text>
             <Typography.Paragraph>槽位只控制同时打开窗口数量，全部合法行都会依次执行完成。</Typography.Paragraph>
           </div>
           <Button type="primary" size="large" onClick={() => void handleStart()}>

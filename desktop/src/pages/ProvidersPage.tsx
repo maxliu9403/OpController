@@ -300,7 +300,7 @@ export function ProvidersPage() {
 
   const handleSync = useCallback(async () => {
     if (!isSelectedProviderStarted) {
-      message.warning("请先启动当前 Provider，再同步指纹窗口。");
+      message.warning("请先启动当前指纹窗口，再同步窗口数据。");
       return;
     }
     setSyncing(true);
@@ -325,7 +325,7 @@ export function ProvidersPage() {
       const values = await configForm.validateFields();
       await api.updateProviderConfig(selectedProviderType, values);
       setConfigReloadKey((value) => value + 1);
-      message.success("Provider 配置已保存");
+      message.success("指纹窗口配置已保存");
     } catch (cause) {
       message.error(cause instanceof Error ? cause.message : "保存配置失败");
     } finally {
@@ -344,9 +344,9 @@ export function ProvidersPage() {
       setManualHealth((current) => ({ ...current, [selectedProviderType]: result }));
       updateProviderHealthCache(selectedProviderType, result);
       if (result.healthy) {
-        message.success(result.message || "Provider 可用");
+        message.success(result.message || "指纹窗口可用");
       } else {
-        message.warning(result.message || "Provider 未就绪");
+        message.warning(result.message || "指纹窗口未就绪");
       }
       setConfigReloadKey((value) => value + 1);
       return result;
@@ -365,7 +365,7 @@ export function ProvidersPage() {
   const handleStartProvider = async (providerType: string) => {
     if (providerType !== selectedProviderType) {
       selectProvider(providerType);
-      message.info("已切换 Provider，请确认下方配置后再次点击启动。");
+      message.info("已切换指纹窗口来源，请确认下方配置后再次点击启动。");
       return;
     }
     const result = await runProviderHealthCheck();
@@ -422,7 +422,7 @@ export function ProvidersPage() {
       });
       setScopeReloadKey((value) => value + 1);
       setProfileReloadKey((value) => value + 1);
-      message.success("Provider 管理范围已保存");
+      message.success("指纹窗口管理范围已保存");
     } catch (cause) {
       message.error(cause instanceof Error ? cause.message : "保存失败");
     } finally {
@@ -462,8 +462,8 @@ export function ProvidersPage() {
   return (
     <Space direction="vertical" size={24} style={{ width: "100%" }}>
       <SectionCard
-        title="Provider 启动"
-        subtitle="先选择要接入的指纹浏览器。需要 API Key 或本地地址的 Provider，先配置参数再启动。"
+        title="指纹窗口启动"
+        subtitle="先选择要接入的指纹浏览器。需要 API Key 或本地地址的指纹窗口来源，先配置参数再启动。"
         extra={
           <Space wrap>
             <Select
@@ -540,8 +540,8 @@ export function ProvidersPage() {
             <Alert
               type="warning"
               showIcon
-              message="请先启动 Provider"
-              description="启动后才会读取该 Provider 的分组、指纹窗口和会话状态。"
+              message="请先启动指纹窗口"
+              description="启动后才会读取该指纹窗口来源的分组、指纹窗口和会话状态。"
             />
           ) : null}
           <Space wrap>
@@ -555,11 +555,11 @@ export function ProvidersPage() {
       </SectionCard>
 
       <SectionCard
-        title="Provider 配置"
+        title="指纹窗口配置"
         subtitle={
           providerConfig.data?.fields.length
             ? "按当前指纹浏览器要求配置本地 API 地址、端口或密钥；密钥字段会脱敏展示。"
-            : "当前 Provider 使用默认本地配置。"
+            : "当前指纹窗口来源使用默认本地配置。"
         }
         extra={
           <Space wrap>
@@ -616,7 +616,7 @@ export function ProvidersPage() {
               <Alert
                 type="warning"
                 showIcon
-                message="Provider 尚未完成配置"
+                message="指纹窗口尚未完成配置"
                 description={`缺少字段：${providerConfig.data.credential_status.missing_required_fields.join("、") || "未知"}`}
               />
             ) : null}
@@ -642,7 +642,7 @@ export function ProvidersPage() {
           <Alert
             type="warning"
             showIcon
-            message="请先启动 Provider"
+            message="请先启动指纹窗口"
             description="启动成功后才能读取分组并保存管理范围。"
           />
         ) : null}
@@ -690,8 +690,8 @@ export function ProvidersPage() {
           <Alert
             type="warning"
             showIcon
-            message="当前 Provider 未启动，暂不加载指纹窗口"
-            description="这能避免 NSTBrowser、BitBrowser 等需要参数的 Provider 在未配置前自动报错。"
+            message="当前指纹窗口来源未启动，暂不加载窗口清单"
+            description="这能避免 NSTBrowser、BitBrowser 等需要参数的指纹窗口来源在未配置前自动报错。"
           />
         ) : null}
         <Space direction="vertical" size={16} style={{ width: "100%" }}>
@@ -718,7 +718,7 @@ export function ProvidersPage() {
           <Table
             rowKey="external_profile_id"
             dataSource={filteredProfiles}
-            locale={{ emptyText: isSelectedProviderStarted ? "暂无指纹窗口" : "请先启动 Provider" }}
+            locale={{ emptyText: isSelectedProviderStarted ? "暂无指纹窗口" : "请先启动指纹窗口" }}
             rowSelection={{
               selectedRowKeys: selectedProfileIds,
               onChange: setSelectedProfileIds,

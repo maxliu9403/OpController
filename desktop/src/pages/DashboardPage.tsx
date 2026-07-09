@@ -213,7 +213,7 @@ export function DashboardPage() {
         message.warning(result.message);
       }
     } catch (cause) {
-      message.error(cause instanceof Error ? cause.message : "Provider 启动检查失败");
+      message.error(cause instanceof Error ? cause.message : "指纹窗口启动检查失败");
     } finally {
       setCheckingProvider(null);
     }
@@ -227,11 +227,11 @@ export function DashboardPage() {
     <Space direction="vertical" size={24} style={{ width: "100%" }} className="dashboard-page">
       <SectionCard
         title="运行总览"
-        subtitle="先看系统、Provider 与批次的健康度，再进入编排和复盘。"
+        subtitle="先看系统、指纹窗口与批次的健康度，再进入编排和复盘。"
       >
         <Row gutter={[16, 16]}>
           <Col xs={24} md={12} xl={6}>
-            <MetricCard title="健康 Provider" value={activeProviders} tone="warm" />
+            <MetricCard title="健康指纹窗口" value={activeProviders} tone="warm" />
           </Col>
           <Col xs={24} md={12} xl={6}>
             <MetricCard title="已管理流程" value={managedWorkflows.length} tone="cool" />
@@ -248,8 +248,8 @@ export function DashboardPage() {
       <Row gutter={[24, 24]}>
         <Col xs={24} xl={14}>
           <SectionCard
-            title="Provider 启动"
-            subtitle="不会默认检查所有指纹浏览器。选择需要接入的 Provider 后，手动启动检测。"
+            title="指纹窗口启动"
+            subtitle="不会默认检查所有指纹浏览器。选择需要接入的指纹窗口后，手动启动检测。"
             extra={
               <StatusBadge
                 status={activeProviders === (system.data?.providers.length ?? 0) ? "healthy" : "unhealthy"}
@@ -304,7 +304,7 @@ export function DashboardPage() {
                 })}
               </div>
             ) : (
-              <Empty description="还没有检测到 Provider" />
+              <Empty description="还没有检测到指纹窗口" />
             )}
           </SectionCard>
         </Col>

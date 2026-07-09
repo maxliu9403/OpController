@@ -422,7 +422,7 @@ export function SchedulesPage() {
         return false;
       }
       if (selectedWorkflowProfileCount <= 0) {
-        throw new Error("当前流程绑定的指纹窗口组没有命中可管理指纹窗口，请检查 Provider 管理范围。");
+        throw new Error("当前流程绑定的指纹窗口组没有命中可管理指纹窗口，请检查指纹窗口管理范围。");
       }
     }
     if (step === 1) {
@@ -492,7 +492,7 @@ export function SchedulesPage() {
         return;
       }
       if (selectedWorkflowProfileCount <= 0) {
-        throw new Error("当前流程绑定的指纹窗口组没有命中可管理指纹窗口，请检查 Provider 管理范围。");
+        throw new Error("当前流程绑定的指纹窗口组没有命中可管理指纹窗口，请检查指纹窗口管理范围。");
       }
       const scheduleExpr = buildScheduleExpr(values);
       Modal.confirm({
@@ -685,7 +685,7 @@ export function SchedulesPage() {
                       <Form.Item name="name" label="计划名称" rules={[{ required: true, message: "请输入计划名称" }]}>
                         <Input placeholder="例如：早班巡检" />
                       </Form.Item>
-                      <Form.Item name="provider_type" label="浏览器 Provider" rules={[{ required: true }]}>
+                      <Form.Item name="provider_type" label="指纹窗口来源" rules={[{ required: true }]}>
                         <Select options={providerOptions} />
                       </Form.Item>
                       <Form.Item name="workflow_id" label="流程" rules={[{ required: true, message: "请选择流程" }]}>

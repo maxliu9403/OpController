@@ -117,7 +117,7 @@ class ExecutionService:
             if not debug_endpoint:
                 raise ExecutionError(
                     "missing_debug_endpoint",
-                    "Provider did not return a ws/debugging_address endpoint",
+                    "指纹窗口未返回 ws/debugging_address endpoint",
                 )
             async with self.session_factory() as session:
                 task = await session.get(TaskRunRecord, task_run_id)
@@ -262,7 +262,7 @@ class ExecutionService:
                 if not (session_ref.ws_endpoint or session_ref.debugging_address):
                     raise ExecutionError(
                         "missing_debug_endpoint",
-                        "Profile 已打开，但 Provider 未返回可附着的调试地址",
+                        "Profile 已打开，但指纹窗口未返回可附着的调试地址",
                     )
                 return session_ref
             except TimeoutError as exc:
@@ -422,7 +422,7 @@ class ExecutionService:
 
     async def _attach_browser(self, endpoint: str | None) -> tuple[Any, Any, Any]:
         if not endpoint:
-            raise ExecutionError("missing_debug_endpoint", "Provider did not return a debugging endpoint")
+            raise ExecutionError("missing_debug_endpoint", "指纹窗口未返回 debugging endpoint")
         try:
             from playwright.async_api import async_playwright
         except ImportError as exc:  # pragma: no cover - depends on optional dependency

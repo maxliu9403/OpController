@@ -23,7 +23,7 @@ const { Content, Sider } = Layout;
 
 const items = [
   { key: "/", label: <Link to="/">概览</Link>, icon: <LayoutDashboard size={16} /> },
-  { key: "/providers", label: <Link to="/providers">Provider</Link>, icon: <RadioTower size={16} /> },
+  { key: "/providers", label: <Link to="/providers">指纹窗口</Link>, icon: <RadioTower size={16} /> },
   { key: "/workflows", label: <Link to="/workflows">流程编排</Link>, icon: <Command size={16} /> },
   { key: "/tasks", label: <Link to="/tasks">任务管理</Link>, icon: <CalendarClock size={16} /> },
   { key: "/monitor", label: <Link to="/monitor">监控</Link>, icon: <Activity size={16} /> },
@@ -58,14 +58,14 @@ export function AppShell() {
   const hasUpdate = Boolean(updateStatus?.update_available);
   const nextVersionLabel = updateStatus?.version ? `v${updateStatus.version.replace(/^v/i, "")}` : "新版本";
   const updateTitle = hasUpdate ? `可更新至 ${nextVersionLabel}` : updateStatus ? "已是最新版本" : "检查更新";
-  const updateSubtitle = installingUpdate
+  const updateSubtitle: string | null = installingUpdate
     ? "正在安装更新"
     : checkingUpdate
       ? "正在连接更新通道"
       : hasUpdate
         ? "安装完成后自动重启"
         : updateStatus
-          ? "更新通道正常"
+          ? null
           : "等待检查";
   const updateActionLabel = hasUpdate ? "安装并重启" : "检查更新";
 
@@ -174,7 +174,7 @@ export function AppShell() {
               </div>
               <div className="app-update-copy">
                 <Typography.Text className="app-update-title">{updateTitle}</Typography.Text>
-                <Typography.Text className="app-update-subtitle">{updateSubtitle}</Typography.Text>
+                {updateSubtitle ? <Typography.Text className="app-update-subtitle">{updateSubtitle}</Typography.Text> : null}
               </div>
             </div>
             <Button

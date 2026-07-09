@@ -22,7 +22,7 @@ export function MonitorPage() {
 
   return (
     <Space direction="vertical" size={16} style={{ width: "100%" }}>
-      <SectionCard title="运行监控" subtitle="展示 sidecar 通过 WebSocket 推送的批次、任务、定时和 Provider 事件流。" />
+      <SectionCard title="运行监控" subtitle="展示 sidecar 通过 WebSocket 推送的批次、任务、定时和指纹窗口事件流。" />
       {events.length ? (
         <List
           dataSource={events}

@@ -2,8 +2,9 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+VERSION="$(node -p "require('$ROOT_DIR/desktop/package.json').version")"
 APP_PATH="${1:-$ROOT_DIR/desktop/src-tauri/target/release/bundle/macos/OpController.app}"
-DMG_PATH="${2:-$ROOT_DIR/desktop/src-tauri/target/release/bundle/dmg/OpController_0.1.0_aarch64_internal.dmg}"
+DMG_PATH="${2:-$ROOT_DIR/desktop/src-tauri/target/release/bundle/dmg/OpController_${VERSION}_aarch64_internal.dmg}"
 STAGING_DIR="$(mktemp -d)"
 
 cleanup() {

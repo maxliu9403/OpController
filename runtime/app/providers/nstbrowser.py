@@ -127,7 +127,7 @@ class NstBrowserProvider(BrowserProvider):
             except httpx.HTTPStatusError as exc:
                 status_code = exc.response.status_code
                 if status_code in {401, 403}:
-                    raise RuntimeError("NSTBrowser API Key 无效或没有权限，请检查 Provider 配置") from exc
+                    raise RuntimeError("NSTBrowser API Key 无效或没有权限，请检查指纹窗口配置") from exc
                 raise RuntimeError(f"NSTBrowser API 请求失败：HTTP {status_code}") from exc
         data = response.json()
         if not isinstance(data, dict):
@@ -312,7 +312,7 @@ class NstBrowserProvider(BrowserProvider):
         await self.close_profile(external_profile_id)
 
     async def arrange_windows(self, layout: dict[str, Any]) -> None:
-        raise NotImplementedError("NSTBrowser 暂不支持 Provider 原生窗口平铺")
+        raise NotImplementedError("NSTBrowser 暂不支持指纹窗口原生窗口平铺")
 
     @staticmethod
     def _tag_summary(row: dict[str, Any]) -> list[dict[str, Any]]:

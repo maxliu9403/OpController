@@ -80,11 +80,11 @@ async def sync_profiles(
     try:
         return await runtime.provider_service.sync_profiles(session, provider_type)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=f"未知指纹浏览器 Provider：{provider_type}") from exc
+        raise HTTPException(status_code=404, detail=f"未知指纹窗口来源：{provider_type}") from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=400, detail=f"同步 Profile 失败：{exc}") from exc
+        raise HTTPException(status_code=400, detail=f"同步指纹窗口失败：{exc}") from exc
 
 
 @router.get("/providers/{provider_type}/config")
@@ -104,7 +104,7 @@ async def reveal_provider_config_secret(
     try:
         return await runtime.provider_service.reveal_config_secret(provider_type, key)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=f"未知指纹浏览器 Provider：{provider_type}") from exc
+        raise HTTPException(status_code=404, detail=f"未知指纹窗口来源：{provider_type}") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

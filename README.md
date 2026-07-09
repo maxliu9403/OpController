@@ -2,12 +2,12 @@
 
 OpController Desktop 是一个面向公司内部运营团队的本地桌面自动化平台。它用于连接指纹浏览器，帮助非技术运营同事通过可视化动作卡片设计运营流程，批量打开多个浏览器窗口并发执行任务，支持本机定时任务，并在本地保存执行结果用于复盘。
 
-当前 V1 版本定位为单机桌面应用，首个完整接入的指纹浏览器 Provider 是 ixBrowser，同时代码结构已经按多 Provider 扩展方式设计。
+当前 V1 版本定位为单机桌面应用，首个完整接入的指纹窗口来源是 ixBrowser，同时代码结构已经按多指纹窗口来源扩展方式设计。
 
 ## 核心能力
 
 - 通过本地 API 连接已安装的指纹浏览器。
-- 同步 Provider 分组、Profile、标签、代理和已打开会话。
+- 同步指纹窗口分组、Profile、标签、代理和已打开会话。
 - 通过动作卡片和页面元素拾取器设计运营流程。
 - 使用 Playwright over CDP 执行动作，不依赖系统全局鼠标。
 - 支持 CSV/Excel 批量导入、Profile 绑定、槽位并发和窗口布局。
@@ -23,7 +23,7 @@ OpController
 │   ├── src/                 React、TypeScript、Ant Design 页面和组件
 │   └── src-tauri/           Rust 桌面启动、sidecar 拉起和打包配置
 ├── runtime/                 Python sidecar 运行时
-│   ├── app/                 FastAPI API、服务层、模型、Provider
+│   ├── app/                 FastAPI API、服务层、模型、指纹窗口来源适配
 │   ├── tests/               runtime 单元测试和集成测试
 │   └── packaging/           PyInstaller 打包配置
 ├── shared/                  共享 workflow schema 和模板
@@ -56,7 +56,7 @@ Tauri App 启动
 - 桌面端：`Tauri 2`、Rust、React、TypeScript、Vite、Ant Design。
 - Runtime：Python `>=3.12`、FastAPI、SQLAlchemy、SQLite WAL、APScheduler、Playwright、PyInstaller。
 - 浏览器自动化：Playwright over CDP，附着到指纹浏览器返回的调试端点。
-- 首个 Provider：ixBrowser Local API，默认地址 `http://127.0.0.1:53200`。
+- 首个指纹窗口来源：ixBrowser Local API，默认地址 `http://127.0.0.1:53200`。
 
 ## 环境要求
 
@@ -453,7 +453,7 @@ Runtime 配置统一使用 `OPCTRL_` 前缀。
 | `OPCTRL_BASE_DIR` | 直接运行 runtime 时为 `~/.opcontroller` | runtime 数据根目录。Tauri 打包运行时会覆盖为 App 本地数据目录。 |
 | `OPCTRL_APP_ROOT` | 未设置 | 打包 runtime 使用的 App/resource 根目录。 |
 | `OPCTRL_TIMEZONE` | `Asia/Shanghai` | 定时任务时区。 |
-| `OPCTRL_PROVIDER_DEFAULT_TYPE` | `ixbrowser` | 默认 Provider 类型。 |
+| `OPCTRL_PROVIDER_DEFAULT_TYPE` | `ixbrowser` | 默认指纹窗口来源类型。 |
 | `OPCTRL_IXBROWSER_API_BASE` | `http://127.0.0.1:53200` | ixBrowser Local API 地址。 |
 | `OPCTRL_IXBROWSER_API_TIMEOUT_SEC` | `10` | ixBrowser Local API 超时时间。 |
 | `OPCTRL_DEFAULT_SLOT_LIMIT` | `6` | 默认可视化并发槽位数。 |
@@ -504,8 +504,8 @@ cache/            runtime 缓存
 1. 安装并登录 ixBrowser。
 2. 启用 ixBrowser Local API。
 3. 确认 Local API 运行在配置端口，默认 `53200`。
-4. 在 Provider 页面同步 Profile。
-5. 如果只希望管理部分分组或窗口，在 Provider 页面配置管理范围。
+4. 在“指纹窗口”页面同步 Profile。
+5. 如果只希望管理部分分组或窗口，在“指纹窗口”页面配置管理范围。
 6. 使用页面元素拾取和流程试运行前，需要先打开一个测试指纹窗口。
 
 如果 Profile 已经在 ixBrowser 中打开，但 ixBrowser 没有返回可附着的调试端点，先在 ixBrowser 中关闭该 Profile，再通过 OpController 重新打开。
@@ -607,7 +607,7 @@ ixBrowser Local API 可能拒绝并发请求。等待几秒、降低并发槽位
 
 ### 缺少 Debug Endpoint
 
-关闭 ixBrowser 中已打开的 Profile，再通过 OpController 打开，让 Provider 返回 CDP 调试端点。
+关闭 ixBrowser 中已打开的 Profile，再通过 OpController 打开，让指纹窗口来源返回 CDP 调试端点。
 
 ### 打包后的 App 没有包含 Runtime
 
@@ -628,11 +628,11 @@ npm --workspace desktop run build:mac
 V1 是本地单机产品，暂不包含：
 
 - 分布式多机器调度。
-- Provider 插件市场。
+- 指纹窗口来源插件市场。
 - 企业 IM 或邮件通知主链路。
 - 系统唤醒后的自动补跑。
 
-当前代码已经按 Provider、调度器、执行器和 runtime service 边界拆分，后续可以在这些边界后继续扩展。
+当前代码已经按指纹窗口来源、调度器、执行器和 runtime service 边界拆分，后续可以在这些边界后继续扩展。
 
 ## 应用内更新
 
