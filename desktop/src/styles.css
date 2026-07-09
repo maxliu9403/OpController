@@ -479,12 +479,15 @@ a {
 .update-dialog-notes {
   display: grid;
   gap: 11px;
+  width: 100%;
+  min-width: 0;
   padding-right: 10px;
 }
 
 .update-dialog-note {
-  display: grid;
-  grid-template-columns: 7px minmax(0, 1fr);
+  display: flex;
+  width: 100%;
+  min-width: 0;
   gap: 10px;
   align-items: start;
   color: #31415f;
@@ -493,6 +496,7 @@ a {
 }
 
 .update-dialog-note > span {
+  flex: 0 0 auto;
   width: 5px;
   height: 5px;
   margin-top: 8px;
@@ -502,9 +506,21 @@ a {
 }
 
 .update-dialog-note .ant-typography {
+  display: block;
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
   color: inherit;
   font-size: inherit;
   line-height: inherit;
+  white-space: normal;
+  word-break: normal;
+  overflow-wrap: break-word;
+}
+
+.update-dialog-note .ant-typography strong {
+  font-weight: 760;
 }
 
 .update-dialog-paragraph.ant-typography {

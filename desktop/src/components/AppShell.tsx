@@ -105,7 +105,7 @@ function renderReleaseNotes(body?: string | null) {
       return (
         <div key={`${line}-${index}`} className="update-dialog-note">
           <span aria-hidden="true" />
-          <Typography.Text>{renderInlineMarkdown(listItem[1])}</Typography.Text>
+          <Typography.Text className="update-dialog-note-text">{renderInlineMarkdown(listItem[1])}</Typography.Text>
         </div>
       );
     }
