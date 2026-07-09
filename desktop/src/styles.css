@@ -185,13 +185,14 @@ a {
 .app-update-card {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
   margin-top: 14px;
   padding: 12px;
   border: 1px solid var(--line-soft);
-  border-radius: 12px;
+  border-radius: 14px;
   background:
-    linear-gradient(180deg, color-mix(in srgb, var(--surface-2) 86%, transparent), var(--surface-1)),
+    radial-gradient(circle at 18% 0%, color-mix(in srgb, var(--warm) 8%, transparent), transparent 36%),
+    linear-gradient(180deg, color-mix(in srgb, var(--surface-2) 92%, transparent), var(--surface-1)),
     var(--surface-1);
   box-shadow: 0 12px 28px rgba(0, 0, 0, 0.06);
 }
@@ -203,59 +204,37 @@ a {
     var(--surface-1);
 }
 
-.app-update-meta,
 .app-update-main {
   display: flex;
   align-items: center;
   min-width: 0;
 }
 
-.app-update-meta {
-  justify-content: space-between;
-  gap: 10px;
-}
-
 .app-update-main {
-  gap: 10px;
-}
-
-.app-update-eyebrow {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--text-soft);
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.app-update-status-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 999px;
-  background: var(--warm);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--warm) 12%, transparent);
+  gap: 11px;
 }
 
 .app-update-current {
   flex: 0 0 auto;
-  padding: 3px 7px;
-  border: 1px solid var(--line-soft);
+  align-self: flex-start;
+  padding: 4px 8px;
+  border: 1px solid color-mix(in srgb, var(--warm) 18%, var(--line-soft));
   border-radius: 999px;
-  color: var(--text-soft);
-  background: color-mix(in srgb, var(--surface-2) 76%, transparent);
+  color: color-mix(in srgb, var(--warm) 76%, var(--text-main));
+  background: color-mix(in srgb, var(--warm) 8%, var(--surface-2));
   font-size: 11px;
-  font-weight: 600;
+  font-weight: 700;
   line-height: 1;
 }
 
 .app-update-icon {
   display: grid;
   flex: 0 0 auto;
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
   place-items: center;
   border: 1px solid color-mix(in srgb, var(--warm) 24%, var(--line-soft));
-  border-radius: 9px;
+  border-radius: 10px;
   color: var(--warm);
   background: color-mix(in srgb, var(--warm) 10%, var(--surface-2));
 }
@@ -288,8 +267,8 @@ a {
 }
 
 .app-update-action.ant-btn {
-  height: 30px;
-  border-radius: 9px;
+  height: 32px;
+  border-radius: 10px;
   font-size: 12px;
   font-weight: 600;
 }

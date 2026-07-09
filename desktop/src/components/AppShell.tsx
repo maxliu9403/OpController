@@ -174,17 +174,18 @@ export function AppShell() {
   const currentVersionLabel = versionLabel(visibleVersion);
   const hasUpdate = Boolean(updateStatus?.update_available);
   const nextVersionLabel = versionLabel(updateStatus?.version, "新版本");
-  const updateTitle = hasUpdate ? `可更新至 ${nextVersionLabel}` : updateStatus ? "已是最新版本" : "检查更新";
+  const updateTitle = hasUpdate ? `可更新至 ${nextVersionLabel}` : updateStatus ? "已是最新版" : "检查版本";
   const updateSubtitle: string | null = installingUpdate
     ? "正在安装更新"
     : checkingUpdate
       ? "正在连接更新通道"
       : hasUpdate
-        ? "安装完成后自动重启"
+        ? `当前 ${currentVersionLabel}，安装后自动重启`
         : updateStatus
-          ? null
-          : "等待检查";
+          ? `当前 ${currentVersionLabel}`
+          : "连接 GitHub Releases";
   const updateActionLabel = hasUpdate ? "安装并重启" : "检查更新";
+  const updateBadgeLabel = hasUpdate ? nextVersionLabel : currentVersionLabel;
   const shouldShowUpdateDialog = hasUpdate && updateStatus?.version;
   const installPercent = Math.max(installProgress?.percent ?? 0, installingUpdate ? 4 : 0);
   const installPercentLabel = installProgress?.percent == null ? "处理中" : `${installPercent}%`;
@@ -367,13 +368,6 @@ export function AppShell() {
             多浏览器编排、可视群控与批次复盘工作台。
           </Typography.Paragraph>
           <div className={`app-update-card${hasUpdate ? " is-available" : ""}`}>
-            <div className="app-update-meta">
-              <Typography.Text className="app-update-eyebrow">
-                <span className="app-update-status-dot" aria-hidden="true" />
-                更新
-              </Typography.Text>
-              <Typography.Text className="app-update-current">{currentVersionLabel}</Typography.Text>
-            </div>
             <div className="app-update-main">
               <div className="app-update-icon" aria-hidden="true">
                 {hasUpdate ? <DownloadCloud size={16} /> : updateStatus ? <CheckCircle2 size={16} /> : <RefreshCw size={16} />}
@@ -382,6 +376,7 @@ export function AppShell() {
                 <Typography.Text className="app-update-title">{updateTitle}</Typography.Text>
                 {updateSubtitle ? <Typography.Text className="app-update-subtitle">{updateSubtitle}</Typography.Text> : null}
               </div>
+              <Typography.Text className="app-update-current">{updateBadgeLabel}</Typography.Text>
             </div>
             <Button
               className="app-update-action"
