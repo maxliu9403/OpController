@@ -246,6 +246,12 @@ jobs:
         run: |
           set -euo pipefail
           tag="${{ steps.release.outputs.tag }}"
+          notes_file="RELEASE_NOTES.md"
+          if [ -f "$notes_file" ]; then
+            cp "$notes_file" release-assets/release-notes.md
+          else
+            printf 'OpController %s\n' "$tag" > release-assets/release-notes.md
+          fi
           RELEASE_TAG="$tag" \
           RELEASE_REPOSITORY="${{ github.repository }}" \
           python - <<'PY'
@@ -259,6 +265,7 @@ jobs:
           version = tag[1:] if tag.startswith("v") else tag
           repository = os.environ["RELEASE_REPOSITORY"]
           root = pathlib.Path("release-assets")
+          notes = (root / "release-notes.md").read_text(encoding="utf-8").strip()
           win = next((root / "windows").glob("*.exe"))
           mac = root / "macos" / "OpController.app.tar.gz"
           win_version_match = re.search(r"_(\d+\.\d+\.\d+)_", win.name)
@@ -278,7 +285,7 @@ jobs:
           }
           payload = {
               "version": version,
-              "notes": f"OpController {tag}",
+              "notes": notes or f"OpController {tag}",
               "pub_date": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
               "platforms": platforms,
           }
@@ -291,7 +298,7 @@ jobs:
         with:
           tag_name: ${{ steps.release.outputs.tag }}
           name: OpController ${{ steps.release.outputs.tag }}
-          body: OpController ${{ steps.release.outputs.tag }}
+          body_path: release-assets/release-notes.md
           draft: false
           prerelease: false
           make_latest: true
