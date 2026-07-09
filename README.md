@@ -654,7 +654,7 @@ desktop/src-tauri/update-config.json
 
 ```json
 {
-  "pubkey": "你的 minisign 公钥",
+  "pubkey": "base64 后的 minisign 公钥",
   "endpoints": [
     "https://你的发布地址/latest.json"
   ]
@@ -663,9 +663,15 @@ desktop/src-tauri/update-config.json
 
 说明：
 
-- `pubkey` 用于校验下载到的更新包签名。
+- `pubkey` 用于校验下载到的更新包签名。Tauri updater 运行时需要填写 base64 后的 minisign 公钥内容，也就是 `tauri.updater.conf.json` 里的 `plugins.updater.pubkey` 格式。
 - `endpoints` 指向返回 Tauri updater JSON 的地址，可以是 GitHub Releases 生成的静态 `latest.json`，也可以是公司内部静态文件服务。
-- 默认仓库内该文件是空配置，开发构建不会自动检查远程更新。
+- 当前仓库内已经配置了 GitHub Releases 更新地址；如果需要关闭某个测试包的远程更新，把 `endpoints` 改为空数组即可。
+
+如果手里只有 `~/.tauri/opcontroller.key.pub` 这种原文公钥，可以这样生成配置值：
+
+```bash
+base64 < ~/.tauri/opcontroller.key.pub | tr -d '\n'
+```
 
 ### 生成更新产物
 
