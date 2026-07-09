@@ -14,7 +14,7 @@ import {
   Sun,
   X,
 } from "lucide-react";
-import { Fragment, type ReactNode, useEffect, useState } from "react";
+import { Fragment, type ReactNode, useEffect, useRef, useState } from "react";
 import { Link, Outlet, useLocation } from "react-router-dom";
 import { api } from "../api/client";
 import { primePollingCache } from "../hooks/usePolling";
@@ -23,6 +23,14 @@ import { checkForUpdates, installUpdate, type UpdateInstallProgress, type Update
 
 const { Content, Sider } = Layout;
 const SKIPPED_UPDATE_STORAGE_KEY = "opcontroller.skipped_update_version";
+const UPDATE_AUTO_REFRESH_MS = 10 * 60 * 1000;
+
+type UpdateRefreshOptions = {
+  openDialog?: boolean;
+  respectSkipped?: boolean;
+  ignoredVersion?: string | null;
+  ignoredVersions?: Array<string | null | undefined>;
+};
 
 const items = [
   { key: "/", label: <Link to="/">概览</Link>, icon: <LayoutDashboard size={16} /> },
@@ -65,6 +73,23 @@ function rememberSkippedUpdateVersion(version: string) {
   if (typeof window !== "undefined") {
     window.localStorage.setItem(SKIPPED_UPDATE_STORAGE_KEY, normalizeVersion(version));
   }
+}
+
+function shouldPromptForUpdate(status: UpdateStatus, options: UpdateRefreshOptions = {}) {
+  if (!status.update_available || !status.version) {
+    return false;
+  }
+  const version = normalizeVersion(status.version);
+  const ignoredVersions = [options.ignoredVersion, ...(options.ignoredVersions ?? [])]
+    .map((value) => normalizeVersion(value))
+    .filter(Boolean);
+  if (ignoredVersions.includes(version)) {
+    return false;
+  }
+  if (options.respectSkipped !== false && version === readSkippedUpdateVersion()) {
+    return false;
+  }
+  return true;
 }
 
 function renderInlineMarkdown(value: string): ReactNode {
@@ -141,6 +166,7 @@ export function AppShell() {
   const [installingUpdate, setInstallingUpdate] = useState(false);
   const [installProgress, setInstallProgress] = useState<UpdateInstallProgress | null>(null);
   const [updateDialogOpen, setUpdateDialogOpen] = useState(false);
+  const dismissedUpdateVersionRef = useRef("");
   const selectedKey =
     items.find((item) => item.key !== "/" && location.pathname.startsWith(item.key))?.key ??
     (location.pathname === "/" ? "/" : location.pathname);
@@ -163,6 +189,20 @@ export function AppShell() {
   const installPercent = Math.max(installProgress?.percent ?? 0, installingUpdate ? 4 : 0);
   const installPercentLabel = installProgress?.percent == null ? "处理中" : `${installPercent}%`;
   const installProgressLabel = installProgress?.message ?? "准备安装更新";
+
+  const applyUpdateStatus = (result: UpdateStatus) => {
+    setCurrentVersion(result.current_version);
+    setUpdateStatus(result);
+  };
+
+  const refreshUpdateStatus = async (options: UpdateRefreshOptions = {}) => {
+    const result = await checkForUpdates();
+    applyUpdateStatus(result);
+    if (options.openDialog && shouldPromptForUpdate(result, options)) {
+      setUpdateDialogOpen(true);
+    }
+    return result;
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -195,9 +235,14 @@ export function AppShell() {
       try {
         const result = await checkForUpdates();
         if (!cancelled) {
-          setCurrentVersion(result.current_version);
-          setUpdateStatus(result);
-          if (result.update_available && normalizeVersion(result.version) !== readSkippedUpdateVersion()) {
+          applyUpdateStatus(result);
+          if (
+            shouldPromptForUpdate(result, {
+              openDialog: true,
+              respectSkipped: true,
+              ignoredVersion: dismissedUpdateVersionRef.current,
+            })
+          ) {
             setUpdateDialogOpen(true);
           }
         }
@@ -207,8 +252,12 @@ export function AppShell() {
     };
 
     void run();
+    const refreshTimer = window.setInterval(() => {
+      void run();
+    }, UPDATE_AUTO_REFRESH_MS);
     return () => {
       cancelled = true;
+      window.clearInterval(refreshTimer);
     };
   }, []);
 
@@ -216,11 +265,9 @@ export function AppShell() {
     setCheckingUpdate(true);
     setInstallProgress(null);
     try {
-      const result = await checkForUpdates();
-      setCurrentVersion(result.current_version);
-      setUpdateStatus(result);
+      const result = await refreshUpdateStatus({ openDialog: true, respectSkipped: false });
       if (result.update_available) {
-        setUpdateDialogOpen(true);
+        dismissedUpdateVersionRef.current = "";
       }
       message.success(result.update_available ? `发现新版本 ${result.version}` : "当前已是最新版本");
     } catch (cause) {
@@ -248,20 +295,50 @@ export function AppShell() {
     }
   };
 
+  const refreshAfterDialogDismiss = (dismissedVersion?: string | null) => {
+    dismissedUpdateVersionRef.current = normalizeVersion(dismissedVersion);
+    void refreshUpdateStatus({
+      openDialog: true,
+      respectSkipped: true,
+      ignoredVersions: [dismissedVersion, dismissedUpdateVersionRef.current],
+    }).catch(() => undefined);
+  };
+
+  const handleDismissUpdateDialog = () => {
+    const dismissedVersion = updateStatus?.version;
+    setUpdateDialogOpen(false);
+    refreshAfterDialogDismiss(dismissedVersion);
+  };
+
   const handleSkipUpdate = () => {
     const version = updateStatus?.version;
     if (!version) {
-      setUpdateDialogOpen(false);
+      handleDismissUpdateDialog();
       return;
     }
     rememberSkippedUpdateVersion(version);
     setUpdateDialogOpen(false);
     message.info(`已跳过 ${versionLabel(version)}`);
+    refreshAfterDialogDismiss(version);
   };
 
-  const handleUpdateCardAction = () => {
+  const handleUpdateCardAction = async () => {
     if (hasUpdate) {
-      setUpdateDialogOpen(true);
+      setCheckingUpdate(true);
+      try {
+        const result = await refreshUpdateStatus({ openDialog: true, respectSkipped: false });
+        if (result.update_available) {
+          dismissedUpdateVersionRef.current = "";
+        }
+        if (!result.update_available) {
+          message.success("当前已是最新版本");
+        }
+      } catch {
+        setUpdateDialogOpen(true);
+        message.warning("刷新更新信息失败，已显示上次获取的版本");
+      } finally {
+        setCheckingUpdate(false);
+      }
       return;
     }
     void handleCheckUpdate();
@@ -347,7 +424,7 @@ export function AppShell() {
                 type="button"
                 disabled={installingUpdate}
                 aria-label="关闭更新弹窗"
-                onClick={() => setUpdateDialogOpen(false)}
+                onClick={handleDismissUpdateDialog}
               >
                 <X size={18} />
               </button>
@@ -384,7 +461,7 @@ export function AppShell() {
               <div className="update-dialog-notes">{renderReleaseNotes(updateStatus.body)}</div>
             </div>
             <footer className="update-dialog-footer">
-              <Button disabled={installingUpdate} onClick={() => setUpdateDialogOpen(false)}>
+              <Button disabled={installingUpdate} onClick={handleDismissUpdateDialog}>
                 取消
               </Button>
               <Button disabled={installingUpdate} onClick={handleSkipUpdate}>
