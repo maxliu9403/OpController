@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 export type UpdateStatus = {
   current_version: string;
@@ -7,6 +8,18 @@ export type UpdateStatus = {
   date?: string | null;
   body?: string | null;
 };
+
+export type UpdateInstallPhase = "preparing" | "downloading" | "installing" | "restarting";
+
+export type UpdateInstallProgress = {
+  phase: UpdateInstallPhase;
+  downloaded: number;
+  total?: number | null;
+  percent?: number | null;
+  message: string;
+};
+
+const UPDATE_INSTALL_PROGRESS_EVENT = "updater-install-progress";
 
 function asMessage(cause: unknown, fallback: string) {
   if (cause instanceof Error) {
@@ -26,10 +39,18 @@ export async function checkForUpdates() {
   }
 }
 
-export async function installUpdate() {
+export async function installUpdate(onProgress?: (progress: UpdateInstallProgress) => void) {
+  let unlisten: (() => void) | undefined;
   try {
+    if (onProgress) {
+      unlisten = await listen<UpdateInstallProgress>(UPDATE_INSTALL_PROGRESS_EVENT, (event) => {
+        onProgress(event.payload);
+      });
+    }
     await invoke("updater_install");
   } catch (cause) {
     throw new Error(asMessage(cause, "安装更新失败"));
+  } finally {
+    unlisten?.();
   }
 }

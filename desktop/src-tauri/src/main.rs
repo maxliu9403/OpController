@@ -7,7 +7,10 @@ use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc, Mutex,
+};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[cfg(target_os = "windows")]
@@ -16,7 +19,7 @@ use std::os::windows::process::CommandExt;
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager, RunEvent};
+use tauri::{AppHandle, Emitter, Manager, RunEvent};
 use tauri_plugin_updater::{Update, UpdaterExt};
 use url::Url;
 
@@ -24,6 +27,7 @@ const DEFAULT_RUNTIME_HOST: &str = "127.0.0.1";
 const DEFAULT_RUNTIME_PORT: u16 = 18519;
 const TOKEN_BYTES: usize = 32;
 const TOKEN_FILE_NAME: &str = "runtime.token";
+const UPDATER_INSTALL_PROGRESS_EVENT: &str = "updater-install-progress";
 const CLASH_HTTP_PROXY_CANDIDATES: [&str; 4] = [
     "http://127.0.0.1:7890",
     "http://127.0.0.1:7897",
@@ -57,6 +61,16 @@ struct UpdateStatus {
     version: Option<String>,
     date: Option<String>,
     body: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateInstallProgress {
+    phase: String,
+    downloaded: u64,
+    total: Option<u64>,
+    percent: Option<u8>,
+    message: String,
 }
 
 #[derive(Deserialize)]
@@ -189,12 +203,88 @@ async fn updater_install(app: AppHandle) -> Result<(), String> {
         return Ok(());
     };
 
+    emit_update_progress(&app, "preparing", 0, None, "准备下载更新包");
+    let downloaded = Arc::new(AtomicU64::new(0));
+    let total = Arc::new(AtomicU64::new(0));
+    let download_app = app.clone();
+    let finish_app = app.clone();
+    let progress_downloaded = Arc::clone(&downloaded);
+    let finish_downloaded = Arc::clone(&downloaded);
+    let progress_total = Arc::clone(&total);
+    let finish_total = Arc::clone(&total);
+
     update
-        .download_and_install(|_, _| {}, || {})
+        .download_and_install(
+            move |chunk_length, content_length| {
+                let current = progress_downloaded.fetch_add(chunk_length as u64, Ordering::Relaxed)
+                    + chunk_length as u64;
+                if let Some(length) = content_length {
+                    progress_total.store(length, Ordering::Relaxed);
+                }
+                let known_total = content_length.or_else(|| atomic_total(&progress_total));
+                emit_update_progress(
+                    &download_app,
+                    "downloading",
+                    current,
+                    known_total,
+                    "正在下载更新包",
+                );
+            },
+            move || {
+                emit_update_progress(
+                    &finish_app,
+                    "installing",
+                    finish_downloaded.load(Ordering::Relaxed),
+                    atomic_total(&finish_total),
+                    "正在安装更新",
+                );
+            },
+        )
         .await
         .map_err(|error| format!("安装更新失败：{}", format_error_chain(&error)))?;
 
+    emit_update_progress(
+        &app,
+        "restarting",
+        downloaded.load(Ordering::Relaxed),
+        atomic_total(&total),
+        "安装完成，正在重启",
+    );
     app.restart();
+}
+
+fn atomic_total(total: &AtomicU64) -> Option<u64> {
+    match total.load(Ordering::Relaxed) {
+        0 => None,
+        value => Some(value),
+    }
+}
+
+fn emit_update_progress(
+    app: &AppHandle,
+    phase: impl Into<String>,
+    downloaded: u64,
+    total: Option<u64>,
+    message: impl Into<String>,
+) {
+    let percent = total.filter(|value| *value > 0).map(|value| {
+        let percent = ((downloaded.saturating_mul(100) / value).min(100)) as u8;
+        if downloaded > 0 {
+            percent.max(1)
+        } else {
+            percent
+        }
+    });
+    let _ = app.emit(
+        UPDATER_INSTALL_PROGRESS_EVENT,
+        UpdateInstallProgress {
+            phase: phase.into(),
+            downloaded,
+            total,
+            percent,
+            message: message.into(),
+        },
+    );
 }
 
 fn main() {

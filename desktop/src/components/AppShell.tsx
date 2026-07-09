@@ -1,4 +1,4 @@
-import { Button, Layout, Menu, Typography, message } from "antd";
+import { Button, Layout, Menu, Progress, Typography, message } from "antd";
 import {
   ArrowDownToLine,
   CalendarClock,
@@ -19,7 +19,7 @@ import { Link, Outlet, useLocation } from "react-router-dom";
 import { api } from "../api/client";
 import { primePollingCache } from "../hooks/usePolling";
 import { useThemeMode } from "../themeMode";
-import { checkForUpdates, installUpdate, type UpdateStatus } from "../updater";
+import { checkForUpdates, installUpdate, type UpdateInstallProgress, type UpdateStatus } from "../updater";
 
 const { Content, Sider } = Layout;
 const SKIPPED_UPDATE_STORAGE_KEY = "opcontroller.skipped_update_version";
@@ -118,6 +118,20 @@ function renderReleaseNotes(body?: string | null) {
   });
 }
 
+function formatBytes(value?: number | null) {
+  if (!value || value <= 0) {
+    return "计算中";
+  }
+  const units = ["B", "KB", "MB", "GB"];
+  let size = value;
+  let unitIndex = 0;
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex += 1;
+  }
+  return `${size >= 10 || unitIndex === 0 ? size.toFixed(0) : size.toFixed(1)} ${units[unitIndex]}`;
+}
+
 export function AppShell() {
   const location = useLocation();
   const { mode, setMode } = useThemeMode();
@@ -125,6 +139,7 @@ export function AppShell() {
   const [currentVersion, setCurrentVersion] = useState<string>("");
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [installingUpdate, setInstallingUpdate] = useState(false);
+  const [installProgress, setInstallProgress] = useState<UpdateInstallProgress | null>(null);
   const [updateDialogOpen, setUpdateDialogOpen] = useState(false);
   const selectedKey =
     items.find((item) => item.key !== "/" && location.pathname.startsWith(item.key))?.key ??
@@ -145,6 +160,9 @@ export function AppShell() {
           : "等待检查";
   const updateActionLabel = hasUpdate ? "安装并重启" : "检查更新";
   const shouldShowUpdateDialog = hasUpdate && updateStatus?.version;
+  const installPercent = Math.max(installProgress?.percent ?? 0, installingUpdate ? 4 : 0);
+  const installPercentLabel = installProgress?.percent == null ? "处理中" : `${installPercent}%`;
+  const installProgressLabel = installProgress?.message ?? "准备安装更新";
 
   useEffect(() => {
     let cancelled = false;
@@ -196,6 +214,7 @@ export function AppShell() {
 
   const handleCheckUpdate = async () => {
     setCheckingUpdate(true);
+    setInstallProgress(null);
     try {
       const result = await checkForUpdates();
       setCurrentVersion(result.current_version);
@@ -213,11 +232,19 @@ export function AppShell() {
 
   const handleInstallUpdate = async () => {
     setInstallingUpdate(true);
+    setInstallProgress({
+      phase: "preparing",
+      downloaded: 0,
+      total: null,
+      percent: null,
+      message: "准备下载更新包",
+    });
     try {
-      await installUpdate();
+      await installUpdate(setInstallProgress);
     } catch (cause) {
       message.error(cause instanceof Error ? cause.message : "安装更新失败");
       setInstallingUpdate(false);
+      setInstallProgress(null);
     }
   };
 
@@ -318,6 +345,7 @@ export function AppShell() {
               <button
                 className="update-dialog-close"
                 type="button"
+                disabled={installingUpdate}
                 aria-label="关闭更新弹窗"
                 onClick={() => setUpdateDialogOpen(false)}
               >
@@ -329,6 +357,28 @@ export function AppShell() {
               <Typography.Paragraph className="update-dialog-summary">
                 当前版本 {currentVersionLabel}，新版本已可用。
               </Typography.Paragraph>
+              {installingUpdate ? (
+                <div className="update-dialog-progress" aria-live="polite">
+                  <div className="update-dialog-progress__head">
+                    <Typography.Text>{installProgressLabel}</Typography.Text>
+                    <Typography.Text>{installPercentLabel}</Typography.Text>
+                  </div>
+                  <Progress
+                    percent={installPercent}
+                    showInfo={false}
+                    status={installProgress?.phase === "restarting" ? "success" : "active"}
+                    strokeColor={{ from: "#1267df", to: "#08a8b7" }}
+                    trailColor="rgba(20, 35, 66, 0.08)"
+                  />
+                  <div className="update-dialog-progress__meta">
+                    <Typography.Text>
+                      {installProgress?.phase === "downloading"
+                        ? `${formatBytes(installProgress.downloaded)} / ${formatBytes(installProgress.total)}`
+                        : "请保持应用打开，安装完成后将自动重启。"}
+                    </Typography.Text>
+                  </div>
+                </div>
+              ) : null}
               <div className="update-dialog-divider" />
               <Typography.Text className="update-dialog-section">更新内容</Typography.Text>
               <div className="update-dialog-notes">{renderReleaseNotes(updateStatus.body)}</div>
@@ -346,7 +396,7 @@ export function AppShell() {
                 icon={<ArrowDownToLine size={15} />}
                 onClick={() => void handleInstallUpdate()}
               >
-                立即更新
+                {installingUpdate ? "正在更新" : "立即更新"}
               </Button>
             </footer>
           </section>

@@ -411,6 +411,12 @@ a {
   transform: scale(1.04);
 }
 
+.update-dialog-close:disabled {
+  color: rgba(42, 54, 76, 0.32);
+  cursor: not-allowed;
+  transform: none;
+}
+
 .update-dialog-body {
   min-height: 0;
   overflow: auto;
@@ -523,6 +529,65 @@ a {
 .update-dialog-empty svg {
   flex: 0 0 auto;
   color: #0b63ff;
+}
+
+.update-dialog-progress {
+  display: grid;
+  gap: 10px;
+  margin: 18px 0 22px;
+  padding: 16px;
+  overflow: hidden;
+  border: 1px solid rgba(11, 99, 255, 0.14);
+  border-radius: 16px;
+  background:
+    radial-gradient(circle at 12% 0%, rgba(8, 168, 183, 0.16), transparent 34%),
+    linear-gradient(135deg, rgba(11, 99, 255, 0.08), rgba(255, 255, 255, 0.9));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.86),
+    0 12px 26px rgba(23, 58, 108, 0.08);
+}
+
+.update-dialog-progress__head,
+.update-dialog-progress__meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.update-dialog-progress__head .ant-typography:first-child {
+  color: #172033;
+  font-size: 13px;
+  font-weight: 760;
+}
+
+.update-dialog-progress__head .ant-typography:last-child {
+  flex: 0 0 auto;
+  color: #075cff;
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.update-dialog-progress .ant-progress-line {
+  margin: 0;
+}
+
+.update-dialog-progress .ant-progress-inner {
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(20, 35, 66, 0.08);
+}
+
+.update-dialog-progress .ant-progress-bg {
+  box-shadow:
+    0 6px 14px rgba(0, 126, 255, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.28);
+}
+
+.update-dialog-progress__meta .ant-typography {
+  color: rgba(64, 80, 107, 0.78);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .update-dialog-footer {

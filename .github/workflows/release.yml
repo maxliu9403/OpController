@@ -219,6 +219,11 @@ jobs:
       - windows
 
     steps:
+      - name: Checkout release notes
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
       - name: Resolve release tag
         id: release
         shell: bash
