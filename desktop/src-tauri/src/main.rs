@@ -8,6 +8,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, RunEvent};
@@ -491,10 +492,11 @@ fn build_updater_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R, ta
 fn build_runtime_updater(app: &AppHandle) -> Result<tauri_plugin_updater::Updater, String> {
     let config = read_update_config(app);
     let builder = app.updater_builder();
-    let builder = if config.pubkey.trim().is_empty() {
+    let pubkey = normalize_updater_pubkey(&config.pubkey);
+    let builder = if pubkey.trim().is_empty() {
         builder
     } else {
-        builder.pubkey(config.pubkey)
+        builder.pubkey(pubkey)
     };
     let builder = builder
         .endpoints(config.endpoints)
@@ -517,6 +519,15 @@ fn read_update_config(app: &AppHandle) -> UpdateConfig {
         pubkey: String::new(),
         endpoints: Vec::new(),
     })
+}
+
+fn normalize_updater_pubkey(pubkey: &str) -> String {
+    let trimmed = pubkey.trim();
+    if trimmed.starts_with("untrusted comment:") {
+        BASE64_STANDARD.encode(format!("{trimmed}\n"))
+    } else {
+        trimmed.to_string()
+    }
 }
 
 fn open_log_file(log_dir: &Path, file_name: &str) -> std::io::Result<File> {

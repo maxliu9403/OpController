@@ -9,7 +9,13 @@ export type UpdateStatus = {
 };
 
 function asMessage(cause: unknown, fallback: string) {
-  return cause instanceof Error ? cause.message : fallback;
+  if (cause instanceof Error) {
+    return cause.message;
+  }
+  if (typeof cause === "string" && cause.trim()) {
+    return cause;
+  }
+  return fallback;
 }
 
 export async function checkForUpdates() {
