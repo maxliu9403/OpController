@@ -1,5 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::env;
+use std::error::Error as StdError;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
@@ -12,13 +14,19 @@ use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, RunEvent};
-use tauri_plugin_updater::UpdaterExt;
+use tauri_plugin_updater::{Update, UpdaterExt};
 use url::Url;
 
 const DEFAULT_RUNTIME_HOST: &str = "127.0.0.1";
 const DEFAULT_RUNTIME_PORT: u16 = 18519;
 const TOKEN_BYTES: usize = 32;
 const TOKEN_FILE_NAME: &str = "runtime.token";
+const CLASH_HTTP_PROXY_CANDIDATES: [&str; 4] = [
+    "http://127.0.0.1:7890",
+    "http://127.0.0.1:7897",
+    "http://127.0.0.1:7899",
+    "http://127.0.0.1:10809",
+];
 
 #[derive(Clone, Serialize)]
 struct RuntimeClientConfig {
@@ -51,6 +59,9 @@ struct UpdateStatus {
 struct UpdateConfig {
     pubkey: String,
     endpoints: Vec<Url>,
+    timeout_ms: Option<u64>,
+    proxy: Option<Url>,
+    no_proxy: Option<bool>,
 }
 
 struct RuntimeLaunchPlan {
@@ -145,12 +156,8 @@ fn runtime_boot_status(state: tauri::State<'_, RuntimeSidecarState>) -> RuntimeB
 
 #[tauri::command]
 async fn updater_check(app: AppHandle) -> Result<UpdateStatus, String> {
-    let updater = build_runtime_updater(&app)?;
     let current_version = app.package_info().version.to_string();
-    let update = updater
-        .check()
-        .await
-        .map_err(|error| format!("检查更新失败：{error}"))?;
+    let (_updater, update) = check_update_with_proxy_fallback(&app).await?;
     if let Some(update) = update {
         Ok(UpdateStatus {
             current_version,
@@ -172,11 +179,7 @@ async fn updater_check(app: AppHandle) -> Result<UpdateStatus, String> {
 
 #[tauri::command]
 async fn updater_install(app: AppHandle) -> Result<(), String> {
-    let updater = build_runtime_updater(&app)?;
-    let update = updater
-        .check()
-        .await
-        .map_err(|error| format!("检查更新失败：{error}"))?;
+    let (_updater, update) = check_update_with_proxy_fallback(&app).await?;
     let Some(update) = update else {
         return Ok(());
     };
@@ -184,7 +187,7 @@ async fn updater_install(app: AppHandle) -> Result<(), String> {
     update
         .download_and_install(|_, _| {}, || {})
         .await
-        .map_err(|error| format!("安装更新失败：{error}"))?;
+        .map_err(|error| format!("安装更新失败：{}", format_error_chain(&error)))?;
 
     app.restart();
 }
@@ -489,21 +492,53 @@ fn build_updater_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R, ta
     tauri_plugin_updater::Builder::new().build()
 }
 
-fn build_runtime_updater(app: &AppHandle) -> Result<tauri_plugin_updater::Updater, String> {
-    let config = read_update_config(app);
-    let builder = app.updater_builder();
+fn build_runtime_updater_with_proxy(
+    app: &AppHandle,
+    config: &UpdateConfig,
+    proxy: Option<Url>,
+) -> Result<tauri_plugin_updater::Updater, String> {
+    let mut builder = app.updater_builder();
     let pubkey = normalize_updater_pubkey(&config.pubkey);
-    let builder = if pubkey.trim().is_empty() {
-        builder
-    } else {
-        builder.pubkey(pubkey)
-    };
+    if !pubkey.trim().is_empty() {
+        builder = builder.pubkey(pubkey);
+    }
+    if let Some(timeout_ms) = config.timeout_ms {
+        builder = builder.timeout(Duration::from_millis(timeout_ms));
+    }
+    if config.no_proxy.unwrap_or(false) {
+        builder = builder.no_proxy();
+    } else if let Some(proxy) = proxy {
+        builder = builder.proxy(proxy);
+    }
     let builder = builder
-        .endpoints(config.endpoints)
+        .endpoints(config.endpoints.clone())
         .map_err(|error| format!("更新配置无效：{error}"))?;
     builder
         .build()
         .map_err(|error| format!("初始化更新器失败：{error}"))
+}
+
+async fn check_update_with_proxy_fallback(
+    app: &AppHandle,
+) -> Result<(tauri_plugin_updater::Updater, Option<Update>), String> {
+    let config = read_update_config(app);
+    let explicit_proxy = resolve_updater_proxy(config.proxy.clone());
+    let updater = build_runtime_updater_with_proxy(app, &config, explicit_proxy.clone())?;
+    match updater.check().await {
+        Ok(update) => return Ok((updater, update)),
+        Err(error) if explicit_proxy.is_none() && !config.no_proxy.unwrap_or(false) => {
+            let direct_error = format_error_chain(&error);
+            for proxy in clash_proxy_candidates() {
+                let proxied_updater = build_runtime_updater_with_proxy(app, &config, Some(proxy.clone()))?;
+                match proxied_updater.check().await {
+                    Ok(update) => return Ok((proxied_updater, update)),
+                    Err(_) => continue,
+                }
+            }
+            Err(format!("检查更新失败：{direct_error}；已尝试 Clash 常见 HTTP 代理端口但仍未连通"))
+        }
+        Err(error) => Err(format!("检查更新失败：{}", format_error_chain(&error))),
+    }
 }
 
 fn read_update_config(app: &AppHandle) -> UpdateConfig {
@@ -518,7 +553,39 @@ fn read_update_config(app: &AppHandle) -> UpdateConfig {
     serde_json::from_str(&raw).unwrap_or(UpdateConfig {
         pubkey: String::new(),
         endpoints: Vec::new(),
+        timeout_ms: None,
+        proxy: None,
+        no_proxy: None,
     })
+}
+
+fn resolve_updater_proxy(configured_proxy: Option<Url>) -> Option<Url> {
+    configured_proxy.or_else(|| {
+        ["OPCTRL_UPDATER_PROXY", "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"]
+            .into_iter()
+            .find_map(|key| env::var(key).ok().and_then(|value| Url::parse(value.trim()).ok()))
+    })
+}
+
+fn clash_proxy_candidates() -> Vec<Url> {
+    CLASH_HTTP_PROXY_CANDIDATES
+        .iter()
+        .filter_map(|value| Url::parse(value).ok())
+        .collect()
+}
+
+fn format_error_chain(error: &dyn StdError) -> String {
+    let mut message = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        let cause_message = cause.to_string();
+        if !cause_message.is_empty() && !message.contains(&cause_message) {
+            message.push_str("；原因：");
+            message.push_str(&cause_message);
+        }
+        source = cause.source();
+    }
+    message
 }
 
 fn normalize_updater_pubkey(pubkey: &str) -> String {

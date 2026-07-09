@@ -65,6 +65,25 @@ jobs:
       - name: Install JavaScript dependencies
         run: npm ci
 
+      - name: Verify release version
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
+          version="${tag#v}"
+          desktop_version="$(node -p "require('./desktop/package.json').version")"
+          tauri_version="$(python3 -c 'import json; print(json.load(open("desktop/src-tauri/tauri.conf.json"))["version"])')"
+          cargo_version="$(python3 -c 'import tomllib; print(tomllib.load(open("desktop/src-tauri/Cargo.toml","rb"))["package"]["version"])')"
+          runtime_version="$(python3 -c 'import tomllib; print(tomllib.load(open("runtime/pyproject.toml","rb"))["project"]["version"])')"
+          if [[ "$desktop_version" != "$version" || "$tauri_version" != "$version" || "$cargo_version" != "$version" || "$runtime_version" != "$version" ]]; then
+            echo "Release tag $tag does not match source versions:" >&2
+            echo "desktop/package.json=$desktop_version" >&2
+            echo "desktop/src-tauri/tauri.conf.json=$tauri_version" >&2
+            echo "desktop/src-tauri/Cargo.toml=$cargo_version" >&2
+            echo "runtime/pyproject.toml=$runtime_version" >&2
+            exit 1
+          fi
+
       - name: Install Python runtime dependencies
         working-directory: runtime
         run: |
@@ -141,6 +160,20 @@ jobs:
       - name: Install JavaScript dependencies
         run: npm ci
 
+      - name: Verify release version
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $tag = if ("${{ github.event_name }}" -eq "workflow_dispatch") { "${{ inputs.tag }}" } else { "${{ github.ref_name }}" }
+          $version = $tag.TrimStart("v")
+          $desktopVersion = node -p "require('./desktop/package.json').version"
+          $tauriVersion = py -3.12 -c "import json; print(json.load(open('desktop/src-tauri/tauri.conf.json'))['version'])"
+          $cargoVersion = py -3.12 -c "import tomllib; print(tomllib.load(open('desktop/src-tauri/Cargo.toml','rb'))['package']['version'])"
+          $runtimeVersion = py -3.12 -c "import tomllib; print(tomllib.load(open('runtime/pyproject.toml','rb'))['project']['version'])"
+          if ($desktopVersion -ne $version -or $tauriVersion -ne $version -or $cargoVersion -ne $version -or $runtimeVersion -ne $version) {
+            Write-Error "Release tag $tag does not match source versions: desktop/package.json=$desktopVersion, tauri.conf.json=$tauriVersion, Cargo.toml=$cargoVersion, runtime/pyproject.toml=$runtimeVersion"
+          }
+
       - name: Install Python runtime dependencies
         shell: pwsh
         working-directory: runtime
@@ -215,7 +248,42 @@ jobs:
           tag="${{ steps.release.outputs.tag }}"
           RELEASE_TAG="$tag" \
           RELEASE_REPOSITORY="${{ github.repository }}" \
-          python -c 'import json, os, pathlib; from datetime import datetime, timezone; tag=os.environ["RELEASE_TAG"]; version=tag[1:] if tag.startswith("v") else tag; repository=os.environ["RELEASE_REPOSITORY"]; root=pathlib.Path("release-assets"); win=next((root/"windows").glob("*.exe")); mac=root/"macos"/"OpController.app.tar.gz"; platforms={"windows-x86_64-nsis": {"signature": pathlib.Path(str(win)+".sig").read_text(encoding="utf-8").strip(), "url": f"https://github.com/{repository}/releases/download/{tag}/{win.name}"}, "darwin-aarch64": {"signature": pathlib.Path(str(mac)+".sig").read_text(encoding="utf-8").strip(), "url": f"https://github.com/{repository}/releases/download/{tag}/{mac.name}"}}; payload={"version": version, "notes": f"OpController {tag}", "pub_date": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"), "platforms": platforms}; (root/"latest.json").write_text(json.dumps(payload, indent=2, ensure_ascii=False)+"\n", encoding="utf-8")'
+          python - <<'PY'
+          import json
+          import os
+          import pathlib
+          import re
+          from datetime import datetime, timezone
+
+          tag = os.environ["RELEASE_TAG"]
+          version = tag[1:] if tag.startswith("v") else tag
+          repository = os.environ["RELEASE_REPOSITORY"]
+          root = pathlib.Path("release-assets")
+          win = next((root / "windows").glob("*.exe"))
+          mac = root / "macos" / "OpController.app.tar.gz"
+          win_version_match = re.search(r"_(\d+\.\d+\.\d+)_", win.name)
+          if not win_version_match or win_version_match.group(1) != version:
+              raise SystemExit(f"Windows asset version mismatch: tag={version}, asset={win.name}")
+          if not mac.exists():
+              raise SystemExit(f"Missing macOS updater asset: {mac}")
+          platforms = {
+              "windows-x86_64-nsis": {
+                  "signature": pathlib.Path(str(win) + ".sig").read_text(encoding="utf-8").strip(),
+                  "url": f"https://github.com/{repository}/releases/download/{tag}/{win.name}",
+              },
+              "darwin-aarch64": {
+                  "signature": pathlib.Path(str(mac) + ".sig").read_text(encoding="utf-8").strip(),
+                  "url": f"https://github.com/{repository}/releases/download/{tag}/{mac.name}",
+              },
+          }
+          payload = {
+              "version": version,
+              "notes": f"OpController {tag}",
+              "pub_date": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+              "platforms": platforms,
+          }
+          (root / "latest.json").write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+          PY
           cat release-assets/latest.json
 
       - name: Create or update release
