@@ -678,12 +678,19 @@ curl -L -I https://github.com/maxliu9403/OpController/releases/latest/download/l
 GitHub Release 下载会跳转到 `release-assets.githubusercontent.com`，公司网络或代理也需要放行该域名。如果当前网络必须走代理，可以在启动桌面端前设置：
 
 ```bash
-OPCTRL_UPDATER_PROXY=http://127.0.0.1:7890 open -a OpController
+OPCTRL_UPDATER_PROXY=http://127.0.0.1:7890 /Applications/OpController.app/Contents/MacOS/opcontroller-desktop
 ```
 
-也可以使用标准环境变量 `HTTPS_PROXY` / `HTTP_PROXY`。
+也可以使用标准环境变量 `HTTPS_PROXY` / `HTTP_PROXY`。注意 `open -a OpController` 通过 macOS LaunchServices 启动应用，环境变量不一定会传给应用；需要临时指定代理时，建议直接运行 `.app/Contents/MacOS/opcontroller-desktop`。
 
-如果使用 Clash，优先开启 TUN/增强模式。未开启 TUN 时，桌面端会在直连失败后自动尝试 Clash 常见 HTTP 代理端口：`7890`、`7897`、`7899`、`10809`。如果你的 Clash HTTP 端口不同，使用 `OPCTRL_UPDATER_PROXY` 显式指定即可。
+如果使用 Clash，不一定要开启 TUN。macOS 版会优先读取系统代理配置，所以只要 Clash 的“系统代理”开关指向 HTTP/Mixed 端口即可，例如 `127.0.0.1:7897`。未配置系统代理时，桌面端会在直连失败后自动尝试 Clash 常见 HTTP 代理端口：`7890`、`7897`、`7899`、`10809`。如果你的 Clash HTTP 端口不同，使用 `OPCTRL_UPDATER_PROXY` 显式指定即可。
+
+Windows 版同样不强制依赖 TUN。开启 Clash 的“系统代理”后，桌面端会读取当前用户的 Windows 系统代理配置，也就是注册表 `HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings` 下的 `ProxyEnable` 和 `ProxyServer`。如果需要临时指定代理，可以在 PowerShell 里直接启动安装后的 exe：
+
+```powershell
+$env:OPCTRL_UPDATER_PROXY = "http://127.0.0.1:7890"
+& "$env:LOCALAPPDATA\Programs\OpController\OpController.exe"
+```
 
 如果手里只有 `~/.tauri/opcontroller.key.pub` 这种原文公钥，可以这样生成配置值：
 
