@@ -14,7 +14,7 @@ def resolve_runtime_version() -> str:
     try:
         return package_version("opcontroller-runtime")
     except PackageNotFoundError:
-        return "0.1.8"
+        return "0.1.9"
 
 
 class Settings(BaseSettings):

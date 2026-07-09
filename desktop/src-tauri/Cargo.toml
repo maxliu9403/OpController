@@ -1,6 +1,6 @@
 [package]
 name = "opcontroller-desktop"
-version = "0.1.8"
+version = "0.1.9"
 description = "Desktop shell for OpController"
 authors = ["OpController"]
 edition = "2021"

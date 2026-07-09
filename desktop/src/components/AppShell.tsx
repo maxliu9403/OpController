@@ -1,6 +1,5 @@
 import { Button, Layout, Menu, Typography, message } from "antd";
 import {
-  Activity,
   ArrowDownToLine,
   CalendarClock,
   CheckCircle2,
@@ -30,7 +29,6 @@ const items = [
   { key: "/providers", label: <Link to="/providers">指纹窗口</Link>, icon: <RadioTower size={16} /> },
   { key: "/workflows", label: <Link to="/workflows">流程编排</Link>, icon: <Command size={16} /> },
   { key: "/tasks", label: <Link to="/tasks">任务管理</Link>, icon: <CalendarClock size={16} /> },
-  { key: "/monitor", label: <Link to="/monitor">监控</Link>, icon: <Activity size={16} /> },
   { key: "/results", label: <Link to="/results">结果</Link>, icon: <ScanSearch size={16} /> },
 ];
 
