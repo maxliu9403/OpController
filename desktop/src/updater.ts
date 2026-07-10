@@ -43,9 +43,19 @@ export async function installUpdate(onProgress?: (progress: UpdateInstallProgres
   let unlisten: (() => void) | undefined;
   try {
     if (onProgress) {
-      unlisten = await listen<UpdateInstallProgress>(UPDATE_INSTALL_PROGRESS_EVENT, (event) => {
-        onProgress(event.payload);
-      });
+      try {
+        unlisten = await listen<UpdateInstallProgress>(UPDATE_INSTALL_PROGRESS_EVENT, (event) => {
+          onProgress(event.payload);
+        });
+      } catch {
+        onProgress({
+          phase: "preparing",
+          downloaded: 0,
+          total: null,
+          percent: null,
+          message: "无法读取详细进度，正在继续安装更新",
+        });
+      }
     }
     await invoke("updater_install");
   } catch (cause) {

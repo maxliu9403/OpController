@@ -58,7 +58,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             desktop/src-tauri/target
-          key: release-macos-cargo-${{ hashFiles('desktop/src-tauri/Cargo.lock') }}
+          key: release-macos-cargo-${{ hashFiles('desktop/src-tauri/Cargo.lock', 'desktop/src-tauri/Cargo.toml', 'desktop/src-tauri/tauri.conf.json', 'desktop/src-tauri/tauri.updater.conf.json', 'desktop/src-tauri/capabilities/**', 'desktop/src-tauri/src/**') }}
           restore-keys: |
             release-macos-cargo-
 
@@ -83,6 +83,14 @@ jobs:
             echo "runtime/pyproject.toml=$runtime_version" >&2
             exit 1
           fi
+
+      - name: Clean stale Tauri app outputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf desktop/src-tauri/target/release/bundle
+          rm -f desktop/src-tauri/target/release/opcontroller-desktop
+          cargo clean --manifest-path desktop/src-tauri/Cargo.toml -p opcontroller-desktop
 
       - name: Install Python runtime dependencies
         working-directory: runtime
@@ -153,7 +161,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             desktop/src-tauri/target
-          key: release-windows-cargo-${{ hashFiles('desktop/src-tauri/Cargo.lock') }}
+          key: release-windows-cargo-${{ hashFiles('desktop/src-tauri/Cargo.lock', 'desktop/src-tauri/Cargo.toml', 'desktop/src-tauri/tauri.conf.json', 'desktop/src-tauri/tauri.updater.conf.json', 'desktop/src-tauri/capabilities/**', 'desktop/src-tauri/src/**') }}
           restore-keys: |
             release-windows-cargo-
 
@@ -173,6 +181,15 @@ jobs:
           if ($desktopVersion -ne $version -or $tauriVersion -ne $version -or $cargoVersion -ne $version -or $runtimeVersion -ne $version) {
             Write-Error "Release tag $tag does not match source versions: desktop/package.json=$desktopVersion, tauri.conf.json=$tauriVersion, Cargo.toml=$cargoVersion, runtime/pyproject.toml=$runtimeVersion"
           }
+
+      - name: Clean stale Tauri app outputs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Remove-Item -Recurse -Force "desktop\src-tauri\target\release\bundle" -ErrorAction SilentlyContinue
+          Remove-Item -Force "desktop\src-tauri\target\release\opcontroller-desktop.exe" -ErrorAction SilentlyContinue
+          Remove-Item -Force "desktop\src-tauri\target\release\opcontroller-desktop.pdb" -ErrorAction SilentlyContinue
+          cargo clean --manifest-path desktop/src-tauri/Cargo.toml -p opcontroller-desktop
 
       - name: Install Python runtime dependencies
         shell: pwsh

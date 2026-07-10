@@ -18,6 +18,7 @@ use std::os::windows::process::CommandExt;
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
 use rand::RngCore;
+use semver::Version;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, RunEvent};
 use tauri_plugin_updater::{Update, UpdaterExt};
@@ -178,6 +179,15 @@ async fn updater_check(app: AppHandle) -> Result<UpdateStatus, String> {
     let current_version = app.package_info().version.to_string();
     let (_updater, update) = check_update_with_proxy_fallback(&app).await?;
     if let Some(update) = update {
+        if !is_update_newer(&current_version, &update.version) {
+            return Ok(UpdateStatus {
+                current_version,
+                update_available: false,
+                version: None,
+                date: None,
+                body: None,
+            });
+        }
         Ok(UpdateStatus {
             current_version,
             update_available: true,
@@ -194,6 +204,20 @@ async fn updater_check(app: AppHandle) -> Result<UpdateStatus, String> {
             body: None,
         })
     }
+}
+
+fn is_update_newer(current_version: &str, update_version: &str) -> bool {
+    match (
+        Version::parse(normalize(current_version)),
+        Version::parse(normalize(update_version)),
+    ) {
+        (Ok(current), Ok(update)) => update > current,
+        _ => normalize(update_version) != normalize(current_version),
+    }
+}
+
+fn normalize(version: &str) -> &str {
+    version.trim().trim_start_matches(['v', 'V'])
 }
 
 #[tauri::command]
