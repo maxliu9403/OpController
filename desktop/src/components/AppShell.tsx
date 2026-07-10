@@ -187,6 +187,7 @@ export function AppShell() {
   const updateActionLabel = hasUpdate ? "安装并重启" : "检查更新";
   const updateBadgeLabel = hasUpdate ? nextVersionLabel : currentVersionLabel;
   const shouldShowUpdateDialog = hasUpdate && updateStatus?.version;
+  const manualDownloadUrl = updateStatus?.download_url ?? "";
   const installPercent = Math.max(installProgress?.percent ?? 0, installingUpdate ? 4 : 0);
   const installPercentLabel = installProgress?.percent == null ? "处理中" : `${installPercent}%`;
   const installProgressLabel = installProgress?.message ?? "准备安装更新";
@@ -462,6 +463,11 @@ export function AppShell() {
               <Button disabled={installingUpdate} onClick={handleSkipUpdate}>
                 跳过此版本
               </Button>
+              {manualDownloadUrl ? (
+                <Button disabled={installingUpdate} href={manualDownloadUrl} target="_blank" rel="noreferrer">
+                  下载安装包
+                </Button>
+              ) : null}
               <Button
                 type="primary"
                 loading={installingUpdate}

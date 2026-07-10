@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "opcontroller-runtime"
-version = "0.1.15"
+version = "0.1.16"
 description = "Local sidecar runtime for OpController Desktop"
 requires-python = ">=3.12"
 dependencies = [

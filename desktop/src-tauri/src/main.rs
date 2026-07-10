@@ -62,6 +62,7 @@ struct UpdateStatus {
     version: Option<String>,
     date: Option<String>,
     body: Option<String>,
+    download_url: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -186,14 +187,17 @@ async fn updater_check(app: AppHandle) -> Result<UpdateStatus, String> {
                 version: None,
                 date: None,
                 body: None,
+                download_url: None,
             });
         }
+        let download_url = manual_download_url(&update.version);
         Ok(UpdateStatus {
             current_version,
             update_available: true,
-            version: Some(update.version),
+            version: Some(update.version.clone()),
             date: update.date.map(|date| date.to_string()),
             body: update.body,
+            download_url,
         })
     } else {
         Ok(UpdateStatus {
@@ -202,6 +206,7 @@ async fn updater_check(app: AppHandle) -> Result<UpdateStatus, String> {
             version: None,
             date: None,
             body: None,
+            download_url: None,
         })
     }
 }
@@ -218,6 +223,26 @@ fn is_update_newer(current_version: &str, update_version: &str) -> bool {
 
 fn normalize(version: &str) -> &str {
     version.trim().trim_start_matches(['v', 'V'])
+}
+
+fn manual_download_url(version: &str) -> Option<String> {
+    let version = normalize(version);
+    if version.is_empty() {
+        return None;
+    }
+    if cfg!(target_os = "windows") {
+        Some(format!(
+            "https://github.com/maxliu9403/OpController/releases/download/v{version}/OpController_{version}_x64-setup.exe"
+        ))
+    } else if cfg!(target_os = "macos") {
+        Some(format!(
+            "https://github.com/maxliu9403/OpController/releases/download/v{version}/OpController.app.tar.gz"
+        ))
+    } else {
+        Some(format!(
+            "https://github.com/maxliu9403/OpController/releases/tag/v{version}"
+        ))
+    }
 }
 
 #[tauri::command]

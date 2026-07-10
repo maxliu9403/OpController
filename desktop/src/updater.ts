@@ -7,6 +7,7 @@ export type UpdateStatus = {
   version?: string | null;
   date?: string | null;
   body?: string | null;
+  download_url?: string | null;
 };
 
 export type UpdateInstallPhase = "preparing" | "downloading" | "installing" | "restarting";
