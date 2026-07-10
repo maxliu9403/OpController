@@ -262,6 +262,43 @@ async fn updater_install(app: AppHandle) -> Result<(), String> {
     let progress_total = Arc::clone(&total);
     let finish_total = Arc::clone(&total);
 
+    #[cfg(target_os = "macos")]
+    {
+        let bytes = update
+            .download(
+                move |chunk_length, content_length| {
+                    let current = progress_downloaded
+                        .fetch_add(chunk_length as u64, Ordering::Relaxed)
+                        + chunk_length as u64;
+                    if let Some(length) = content_length {
+                        progress_total.store(length, Ordering::Relaxed);
+                    }
+                    let known_total = content_length.or_else(|| atomic_total(&progress_total));
+                    emit_update_progress(
+                        &download_app,
+                        "downloading",
+                        current,
+                        known_total,
+                        "正在下载更新包",
+                    );
+                },
+                move || {
+                    emit_update_progress(
+                        &finish_app,
+                        "installing",
+                        finish_downloaded.load(Ordering::Relaxed),
+                        atomic_total(&finish_total),
+                        "正在安装更新",
+                    );
+                },
+            )
+            .await
+            .map_err(|error| format!("下载更新失败：{}", format_error_chain(&error)))?;
+        install_macos_update(&bytes)
+            .map_err(|error| format!("安装更新失败：{}", format_error_chain(error.as_ref())))?;
+    }
+
+    #[cfg(not(target_os = "macos"))]
     update
         .download_and_install(
             move |chunk_length, content_length| {
@@ -300,6 +337,119 @@ async fn updater_install(app: AppHandle) -> Result<(), String> {
         "安装完成，正在重启",
     );
     app.restart();
+}
+
+#[cfg(target_os = "macos")]
+fn install_macos_update(bytes: &[u8]) -> Result<(), Box<dyn StdError>> {
+    let app_path = current_macos_app_path()?;
+    if app_path.starts_with("/Volumes/") {
+        return Err("当前 OpController 正在从磁盘映像或外接卷运行。请先把 OpController.app 拖入 /Applications，再从 /Applications 启动后重试；也可以下载安装包手动覆盖安装。".into());
+    }
+    let app_parent = app_path
+        .parent()
+        .ok_or("无法解析 OpController.app 所在目录")?;
+    let app_name = app_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or("无法解析 OpController.app 文件名")?;
+    let staging_root = app_parent.join(format!(
+        ".opcontroller-update-{}-{}",
+        std::process::id(),
+        current_timestamp()
+    ));
+    let extract_dir = staging_root.join("extracted");
+    let archive_path = staging_root.join("update.tar.gz");
+    let backup_path = app_parent.join(format!(
+        ".{app_name}.backup-{}-{}",
+        std::process::id(),
+        current_timestamp()
+    ));
+
+    fs::create_dir_all(&extract_dir)?;
+    fs::write(&archive_path, bytes)?;
+
+    let status = Command::new("/usr/bin/tar")
+        .arg("-xzf")
+        .arg(&archive_path)
+        .arg("-C")
+        .arg(&extract_dir)
+        .status()?;
+    if !status.success() {
+        let _ = fs::remove_dir_all(&staging_root);
+        return Err("无法解包 macOS 更新包".into());
+    }
+
+    let new_app = match find_extracted_app(&extract_dir, app_name) {
+        Ok(path) => path,
+        Err(error) => {
+            let _ = fs::remove_dir_all(&staging_root);
+            return Err(error);
+        }
+    };
+    fs::rename(&app_path, &backup_path).map_err(|error| {
+        let _ = fs::remove_dir_all(&staging_root);
+        std::io::Error::new(
+            error.kind(),
+            format!(
+                "无法备份当前 OpController.app：{error}。请确认应用已安装在本机磁盘的 /Applications，或下载安装包手动覆盖安装。"
+            ),
+        )
+    })?;
+    if let Err(error) = fs::rename(&new_app, &app_path) {
+        let _ = fs::rename(&backup_path, &app_path);
+        let _ = fs::remove_dir_all(&staging_root);
+        return Err(std::io::Error::new(
+            error.kind(),
+            format!(
+                "无法把新版本移动到应用目录：{error}。已尝试恢复旧版本，请下载安装包手动覆盖安装。"
+            ),
+        )
+        .into());
+    }
+
+    let _ = fs::remove_dir_all(&backup_path);
+    let _ = fs::remove_dir_all(&staging_root);
+    let _ = Command::new("touch").arg(&app_path).status();
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn current_macos_app_path() -> Result<PathBuf, Box<dyn StdError>> {
+    let executable = env::current_exe()?;
+    let macos_dir = executable.parent().ok_or("无法解析可执行文件目录")?;
+    let contents_dir = macos_dir.parent().ok_or("无法解析 Contents 目录")?;
+    let app_dir = contents_dir.parent().ok_or("无法解析 .app 目录")?;
+    Ok(app_dir.to_path_buf())
+}
+
+#[cfg(target_os = "macos")]
+fn find_extracted_app(root: &Path, expected_name: &str) -> Result<PathBuf, Box<dyn StdError>> {
+    let mut fallback = None;
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in fs::read_dir(&dir)? {
+            let path = entry?.path();
+            if path.extension().and_then(|value| value.to_str()) == Some("app") {
+                if path.file_name().and_then(|value| value.to_str()) == Some(expected_name) {
+                    return Ok(path);
+                }
+                fallback.get_or_insert(path);
+                continue;
+            }
+            if path.is_dir() {
+                stack.push(path);
+            }
+        }
+    }
+    fallback.ok_or_else(|| "更新包中没有找到 OpController.app".into())
+}
+
+#[cfg(target_os = "macos")]
+fn current_timestamp() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 fn atomic_total(total: &AtomicU64) -> Option<u64> {
