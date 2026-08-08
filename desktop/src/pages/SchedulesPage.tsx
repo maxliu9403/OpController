@@ -212,9 +212,6 @@ function mappingErrorMessage(result: InputProfileMappingValidation) {
   if (result.out_of_scope_profile_ids.length) {
     parts.push(`不在流程指纹窗口组内: ${result.out_of_scope_profile_ids.slice(0, 5).join(", ")}`);
   }
-  if (result.missing_profile_ids.length) {
-    parts.push(`缺少: ${result.missing_profile_ids.slice(0, 5).join(", ")}`);
-  }
   return parts.join("；") || "表格 profile_id 映射校验失败";
 }
 

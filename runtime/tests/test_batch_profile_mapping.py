@@ -77,7 +77,7 @@ async def seed_profiles_and_workflow(session) -> WorkflowTemplateRecord:
 
 
 @pytest.mark.asyncio
-async def test_validate_profile_mapping_requires_exact_profile_id_match() -> None:
+async def test_validate_profile_mapping_accepts_workflow_profile_subset() -> None:
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     async_session = async_sessionmaker(engine, expire_on_commit=False)
     async with engine.begin() as conn:
@@ -87,26 +87,63 @@ async def test_validate_profile_mapping_requires_exact_profile_id_match() -> Non
     async with async_session() as session:
         workflow = await seed_profiles_and_workflow(session)
 
-        valid = await service.validate_profile_mapping(
+        result = await service.validate_profile_mapping(
             session,
             workflow_id=workflow.id,
             provider_type="ixbrowser",
-            rows=[{"profile_id": "101"}, {"profile_id": "102"}],
+            rows=[{"profile_id": "101"}],
             strict=True,
         )
-        assert valid.valid is True
-        assert valid.matched_count == 2
 
-        invalid = await service.validate_profile_mapping(
+        assert result.valid is True
+        assert result.matched_count == 1
+        assert result.missing_profile_ids == ["102"]
+
+
+@pytest.mark.asyncio
+async def test_validate_profile_mapping_rejects_profiles_outside_workflow_group() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async_session = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    service = make_service(async_session)
+    async with async_session() as session:
+        workflow = await seed_profiles_and_workflow(session)
+
+        result = await service.validate_profile_mapping(
+            session,
+            workflow_id=workflow.id,
+            provider_type="ixbrowser",
+            rows=[{"profile_id": "101"}, {"profile_id": "999"}],
+            strict=True,
+        )
+
+        assert result.valid is False
+        assert result.out_of_scope_profile_ids == ["999"]
+
+
+@pytest.mark.asyncio
+async def test_validate_profile_mapping_rejects_duplicate_profile_ids() -> None:
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async_session = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    service = make_service(async_session)
+    async with async_session() as session:
+        workflow = await seed_profiles_and_workflow(session)
+
+        result = await service.validate_profile_mapping(
             session,
             workflow_id=workflow.id,
             provider_type="ixbrowser",
             rows=[{"profile_id": "101"}, {"profile_id": "101"}],
             strict=True,
         )
-        assert invalid.valid is False
-        assert invalid.duplicate_profile_ids == ["101"]
-        assert invalid.missing_profile_ids == ["102"]
+
+        assert result.valid is False
+        assert result.duplicate_profile_ids == ["101"]
 
 
 @pytest.mark.asyncio

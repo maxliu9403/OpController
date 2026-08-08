@@ -241,7 +241,7 @@ class BatchService:
         missing_profile_ids = sorted(profile_id_set - set(profile_ids))
         valid = not invalid_rows and not duplicate_profile_ids and not out_of_scope_profile_ids
         if strict:
-            valid = valid and not missing_profile_ids and bool(rows) and bool(profiles)
+            valid = valid and bool(rows) and bool(profiles)
         else:
             valid = bool(rows) and bool(profiles)
 
@@ -1083,8 +1083,6 @@ class BatchService:
             messages.append(f"profile_id 重复: {', '.join(validation.duplicate_profile_ids[:10])}")
         if validation.out_of_scope_profile_ids:
             messages.append(f"profile_id 在当前指纹浏览器的流程运行指纹窗口组内不存在: {', '.join(validation.out_of_scope_profile_ids[:10])}")
-        if validation.missing_profile_ids:
-            messages.append(f"Excel 缺少流程指纹窗口组内的 profile_id: {', '.join(validation.missing_profile_ids[:10])}")
         if validation.warnings:
             messages.extend(validation.warnings)
         return "；".join(messages) or "Excel 与流程 Profile 映射校验失败"
