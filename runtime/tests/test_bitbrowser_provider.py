@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 
+from app.api import pick_locator_once
 from app.providers.bitbrowser import BitBrowserProvider
+from app.providers.registry import ProviderRegistry
+from app.schemas.preview import LocatorLivePreviewResult, LocatorPickOnceRequest
+from app.services.locator_service import LocatorService
+from app.services.provider_service import ProviderService
 
 
 class MemoryConfigStore:
@@ -151,27 +158,13 @@ async def test_bitbrowser_open_close_sessions_and_arrange(monkeypatch: pytest.Mo
                     "seq": 3474,
                 },
             }
+        if path == "/browser/pids/all":
+            return {"success": True, "data": {"b-1": 31295}}
+        if path == "/browser/ports":
+            return {"success": True, "data": {"b-1": "53325"}}
         return {"success": True, "data": {}}
 
-    async def fake_post_all_rows(
-        path: str,
-        payload: dict[str, Any] | None = None,
-        *,
-        page_size: int = 100,
-    ) -> list[dict[str, Any]]:
-        assert path == "/browser/list"
-        assert payload == {"opened": True}
-        return [
-            {
-                "id": "b-1",
-                "ws": "ws://127.0.0.1:53325/devtools/browser/abc",
-                "http": "127.0.0.1:53325",
-                "pid": 31295,
-            }
-        ]
-
     monkeypatch.setattr(provider, "_post", fake_post)
-    monkeypatch.setattr(provider, "_post_all_rows", fake_post_all_rows)
 
     opened = await provider.open_profile("b-1")
     sessions = await provider.list_opened_sessions()
@@ -193,6 +186,8 @@ async def test_bitbrowser_open_close_sessions_and_arrange(monkeypatch: pytest.Mo
     assert opened.debugging_address == "127.0.0.1:53325"
     assert opened.browser_pid == 31295
     assert sessions[0].provider_profile_id == "b-1"
+    assert sessions[0].debugging_address == "127.0.0.1:53325"
+    assert sessions[0].browser_pid == 31295
     assert calls[0] == ("/browser/open", {"id": "b-1", "args": [], "queue": True})
     assert ("/browser/close", {"id": "b-1"}) in calls
     assert ("/browser/closing/reset", {"id": "b-1"}) in calls
@@ -213,3 +208,135 @@ def test_bitbrowser_page_rows_accepts_common_shapes() -> None:
 
     assert rows == [{"id": "b-1"}]
     assert total == 12
+
+
+@pytest.mark.asyncio
+async def test_bitbrowser_pick_after_test_open_with_profile_list_without_debug_address(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = make_provider()
+    opened = False
+    endpoint = "ws://127.0.0.1:53325/devtools/browser/abc"
+
+    async def fake_post(path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        nonlocal opened
+        if path == "/browser/open":
+            opened = True
+            return {"success": True, "data": {"ws": endpoint, "http": "127.0.0.1:53325", "pid": 31295}}
+        if path == "/browser/list":
+            return {"success": True, "data": {"list": [{"id": "b-1", "name": "Test browser"}] if opened else []}}
+        if path == "/browser/pids/all":
+            return {"success": True, "data": {"b-1": 31295} if opened else {}}
+        if path == "/browser/ports":
+            return {"success": True, "data": {"b-1": 53325} if opened else {}}
+        raise AssertionError(f"unexpected path: {path}")
+
+    monkeypatch.setattr(provider, "_post", fake_post)
+    registry = ProviderRegistry()
+    registry.register(provider)
+    service = ProviderService(registry)
+    session = await service.open_test_session("bitbrowser", "b-1")
+    assert session.ws_endpoint == endpoint
+    assert (await service.list_opened_sessions("bitbrowser"))[0].provider_profile_id == "b-1"
+
+    execution = SimpleNamespace(
+        pick_locator_once=AsyncMock(return_value={"tag_name": "button", "text": "Continue", "attributes": {"id": "continue"}}),
+        preview_locator=AsyncMock(return_value=LocatorLivePreviewResult(success=True, match_count=1)),
+    )
+    runtime = SimpleNamespace(provider_service=service, execution_service=execution, locator_service=LocatorService())
+    result = await pick_locator_once(
+        LocatorPickOnceRequest(provider_type="bitbrowser", external_profile_id="b-1"), runtime
+    )
+
+    assert result["success"] is True
+    execution.pick_locator_once.assert_awaited_once_with(endpoint="127.0.0.1:53325", timeout_sec=30)
+
+
+@pytest.mark.asyncio
+async def test_bitbrowser_sessions_follow_external_open_restart_and_close(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = make_provider()
+    pids: dict[str, Any] = {"b-1": "31295", "closed": 0}
+    ports: dict[str, Any] = {"b-1": "53325", "closed": "53326"}
+
+    async def fake_post(path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        if path == "/browser/pids/all":
+            return {"success": True, "data": dict(pids)}
+        if path == "/browser/ports":
+            return {"success": True, "data": dict(ports)}
+        raise AssertionError(f"Session discovery must not open or close profiles: {path}")
+
+    monkeypatch.setattr(provider, "_post", fake_post)
+    registry = ProviderRegistry()
+    registry.register(provider)
+    service = ProviderService(registry)
+
+    # Reuse a window opened outside OpController without restarting it.
+    session = await service.open_test_session("bitbrowser", "b-1")
+    assert session.debugging_address == "127.0.0.1:53325"
+    assert session.browser_pid == 31295
+    assert len(await service.list_opened_sessions("bitbrowser")) == 1
+
+    pids["b-1"] = 40000
+    ports["b-1"] = "54444"
+    restarted = await service.get_opened_session("bitbrowser", "b-1")
+    assert restarted is not None
+    assert restarted.debugging_address == "127.0.0.1:54444"
+    assert restarted.browser_pid == 40000
+
+    # A stale port alone must not keep a closed window listed as open.
+    pids.clear()
+    assert await service.get_opened_session("bitbrowser", "b-1") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("port", [None, "", "invalid", "0", -1, 65536])
+async def test_bitbrowser_live_session_without_valid_port_is_not_attachable(
+    monkeypatch: pytest.MonkeyPatch, port: Any,
+) -> None:
+    provider = make_provider()
+
+    async def fake_post(path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        if path == "/browser/pids/all":
+            return {"success": True, "data": {"b-1": 31295}}
+        assert path == "/browser/ports"
+        return {"success": True, "data": {"b-1": port} if port is not None else {}}
+
+    monkeypatch.setattr(provider, "_post", fake_post)
+    sessions = await provider.list_opened_sessions()
+
+    assert len(sessions) == 1
+    assert sessions[0].browser_pid == 31295
+    assert sessions[0].ws_endpoint is None
+    assert sessions[0].debugging_address is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("envelope", [True, False])
+@pytest.mark.parametrize("pids", [{}, {"b-1": 31295}])
+async def test_bitbrowser_live_pid_response_accepts_documented_envelopes(
+    monkeypatch: pytest.MonkeyPatch, envelope: bool, pids: dict[str, int],
+) -> None:
+    provider = make_provider()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/browser/pids/all"
+        return httpx.Response(200, json={"success": True, "data": pids} if envelope else pids)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="http://bitbrowser.test") as client:
+        monkeypatch.setattr(provider, "_client_for_config", AsyncMock(return_value=client))
+        response = await provider._post("/browser/pids/all")
+
+    assert response["data"] == pids
+
+
+@pytest.mark.asyncio
+async def test_bitbrowser_session_lookup_preserves_provider_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = make_provider()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"success": False, "msg": "Local Server unavailable"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="http://bitbrowser.test") as client:
+        monkeypatch.setattr(provider, "_client_for_config", AsyncMock(return_value=client))
+        with pytest.raises(RuntimeError, match="Local Server unavailable"):
+            await provider.list_opened_sessions()

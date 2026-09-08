@@ -396,11 +396,11 @@ export function WorkflowStepComposer({
           <Alert
             type={previewAvailable ? "success" : "warning"}
             showIcon
-            message={previewAvailable ? `当前测试会话: ${testSessionLabel}` : "还没有打开测试指纹窗口"}
+            message={previewAvailable ? `当前测试会话: ${testSessionLabel}` : "测试指纹窗口尚未就绪"}
             description={
               previewAvailable
                 ? "你现在可以从真实页面点选元素、自动生成定位规则，并做单步试跑。"
-                : "请先在流程页顶部选择一个测试指纹窗口并打开它，否则这里只能生成规则，不能在真实页面验证。"
+                : "请先在流程页顶部打开或重新连接测试指纹窗口，连接就绪后即可点选元素和试跑步骤。"
             }
           />
 

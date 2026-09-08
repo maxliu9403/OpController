@@ -661,8 +661,13 @@ export function WorkflowsPage() {
   );
   const selectedSession = useMemo(
     () =>
-      (openedSessions.data ?? []).find((item) => item.provider_profile_id === selectedProfileId) ?? null,
-    [openedSessions.data, selectedProfileId],
+      (openedSessions.data ?? []).find(
+        (item) => item.provider_type === selectedProviderType && item.provider_profile_id === selectedProfileId,
+      ) ?? null,
+    [openedSessions.data, selectedProviderType, selectedProfileId],
+  );
+  const testSessionReady = Boolean(
+    !openedSessions.error && selectedSession && (selectedSession.ws_endpoint || selectedSession.debugging_address),
   );
   const selectedProfile = useMemo(
     () => filteredProfiles.find((item) => item.external_profile_id === selectedProfileId) ?? null,
@@ -1646,7 +1651,7 @@ export function WorkflowsPage() {
       stability_score: result.stability_score,
       locator: result.locator,
     };
-    if (selectedSession && selectedProfileId) {
+    if (testSessionReady && selectedProfileId) {
       try {
         const live = await api.previewLocatorLive({
           provider_type: selectedProviderType,
@@ -1665,7 +1670,7 @@ export function WorkflowsPage() {
   };
 
   const handleLocatorPick = async (values: StepComposerValues): Promise<LocatorPickResult> => {
-    if (!selectedProfileId || !selectedSession) {
+    if (!selectedProfileId || !testSessionReady) {
       throw new Error("请先打开一个测试指纹窗口，再从页面点选元素");
     }
     return api.pickLocatorOnce({
@@ -1682,7 +1687,7 @@ export function WorkflowsPage() {
     if (!selectedCard) {
       throw new Error("当前没有选中的动作卡片");
     }
-    if (!selectedProfileId || !selectedSession) {
+    if (!selectedProfileId || !testSessionReady) {
       throw new Error("请先打开一个测试指纹窗口，再执行单步试跑");
     }
       const stepPayload = buildStepPayload(selectedCard, values, {
@@ -1703,7 +1708,7 @@ export function WorkflowsPage() {
   };
 
   const handleDryRunWorkflow = async () => {
-    if (!selectedProfileId || !selectedSession) {
+    if (!selectedProfileId || !testSessionReady) {
       message.warning("请先打开一个测试指纹窗口，再做整条流程试运行。");
       return;
     }
@@ -1985,19 +1990,21 @@ export function WorkflowsPage() {
         <div>
           <Typography.Text className="section-eyebrow">测试会话</Typography.Text>
           <Typography.Title level={5} style={{ margin: 0 }}>
-            {selectedSession ? "已连接测试窗口" : "选择窗口并打开"}
+            {testSessionReady ? "已连接测试窗口" : selectedSession ? "测试窗口待连接" : "选择窗口并打开"}
           </Typography.Title>
         </div>
-        <StatusBadge status={selectedSession ? "attachable" : "unbound"} label={selectedSession ? "已就绪" : "未连接"} />
+        <StatusBadge status={testSessionReady ? "attachable" : "unbound"} label={testSessionReady ? "已就绪" : "未连接"} />
       </div>
       <Alert
-        type={selectedSession ? "success" : "info"}
+        type={testSessionReady ? "success" : selectedSession || openedSessions.error ? "warning" : "info"}
         showIcon
-        message={selectedSession ? "测试指纹窗口已就绪" : "先打开一个测试指纹窗口"}
+        message={testSessionReady ? "测试指纹窗口已就绪" : selectedSession ? "测试窗口已打开，连接尚未就绪" : "先打开一个测试指纹窗口"}
         description={
-          selectedSession
+          openedSessions.error ?? (testSessionReady
             ? selectedProfile?.display_name ?? selectedProfileId
-            : "打开后进入目标页面，再从左侧添加动作并做单步试跑。"
+            : selectedSession
+              ? "请点击“打开测试指纹窗口”重新连接，连接就绪后即可点选元素和试跑步骤。"
+              : "打开后进入目标页面，再从左侧添加动作并做单步试跑。")
         }
       />
       {groups.error ? (
@@ -2319,7 +2326,7 @@ export function WorkflowsPage() {
                         cancelText="取消"
                         onConfirm={() => void handleDryRunWorkflow()}
                       >
-                        <Button type="primary" loading={dryRunLoading} disabled={!selectedSession}>
+                        <Button type="primary" loading={dryRunLoading} disabled={!testSessionReady}>
                           全流程测试
                         </Button>
                       </Popconfirm>
@@ -2755,7 +2762,7 @@ export function WorkflowsPage() {
             ? `${selectedProfile.display_name}${selectedProfile.remark ? ` · ${selectedProfile.remark}` : ""} (#${selectedProfile.external_profile_id})`
             : null
         }
-        previewAvailable={Boolean(selectedSession)}
+        previewAvailable={testSessionReady}
         onCancel={() => {
           setSelectedCard(null);
           setEditingStepIndex(null);

@@ -98,6 +98,11 @@ class BitBrowserProvider(BrowserProvider):
         data = response.json()
         if not isinstance(data, dict):
             raise RuntimeError("BitBrowser API 返回格式异常")
+        # The documented pids/all response may omit the usual success/data envelope.
+        if path == "/browser/pids/all" and "success" not in data and all(
+            (self._safe_int(value) or 0) > 0 for value in data.values()
+        ):
+            return {"success": True, "data": data}
         if data.get("success") is not True:
             raise RuntimeError(str(data.get("msg") or "BitBrowser API error"))
         return data
@@ -192,23 +197,38 @@ class BitBrowserProvider(BrowserProvider):
         return groups
 
     async def list_opened_sessions(self) -> list[ProviderSessionRef]:
-        rows = await self._post_all_rows("/browser/list", {"opened": True})
+        # /browser/list contains profile definitions, not live sessions, and does
+        # not supply CDP endpoints. Read live PIDs and ports on every refresh so
+        # externally opened, closed, and restarted windows are reflected too.
+        pid_response = await self._post("/browser/pids/all")
+        pids = pid_response.get("data")
+        if not isinstance(pids, dict):
+            raise RuntimeError("BitBrowser 已打开窗口进程列表返回格式异常")
+        live_pids = {
+            str(profile_id): pid
+            for profile_id, raw_pid in pids.items()
+            if (pid := self._safe_int(raw_pid)) is not None and pid > 0
+        }
+        if not live_pids:
+            return []
+
+        port_response = await self._post("/browser/ports")
+        ports = port_response.get("data")
+        if not isinstance(ports, dict):
+            raise RuntimeError("BitBrowser 已打开窗口调试端口列表返回格式异常")
         sessions: list[ProviderSessionRef] = []
-        for row in rows:
-            profile_id = row.get("id") or row.get("browserId") or row.get("browserID")
-            if profile_id in (None, ""):
-                continue
-            ws_endpoint = row.get("ws") or row.get("webSocketDebuggerUrl")
-            debugging_address = self._debugging_address(row)
+        for profile_id, pid in live_pids.items():
+            port = self._safe_int(ports.get(profile_id))
+            if port is not None and not 1 <= port <= 65535:
+                port = None
             sessions.append(
                 ProviderSessionRef(
                     provider_type=self.provider_type,
-                    provider_profile_id=str(profile_id),
-                    provider_session_id=str(row.get("pid")) if row.get("pid") else str(profile_id),
-                    browser_pid=self._safe_int(row.get("pid")),
-                    ws_endpoint=ws_endpoint,
-                    debugging_address=debugging_address,
-                    metadata=row,
+                    provider_profile_id=profile_id,
+                    provider_session_id=str(pid),
+                    browser_pid=pid,
+                    debugging_address=f"127.0.0.1:{port}" if port is not None else None,
+                    metadata={"pid": pid, "debugPort": port},
                 )
             )
         return sessions
